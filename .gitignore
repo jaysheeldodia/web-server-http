@@ -1,0 +1,93 @@
+# Compiled Object files
+*.o
+*.obj
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+webserver
+debug_test
+load_tester
+server_tester
+
+# Build directories
+build/
+bin/
+obj/
+Debug/
+Release/
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+!Makefile  # Keep our custom Makefile
+
+# Core dumps
+core
+core.*
+
+# Logs
+*.log
+access.log
+error.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Package files
+*.tar.gz
+*.zip
+*.rar
+
+# Documentation generated files
+doc/
+docs/html/
+docs/latex/
+
+# Test coverage files
+*.gcov
+*.gcda
+*.gcno
+coverage/
+
+# Profiling files
+gmon.out
+*.prof
+
+# Backup files
+*.bak
+*.backup
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Custom - Optional www content (if you want to ignore test files)
+# www/
+# But we'll keep our sample files for now
