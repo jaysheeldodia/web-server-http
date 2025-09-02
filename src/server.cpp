@@ -11,6 +11,7 @@
 #include "../include/globals.h"
 #include <atomic>
 #include <algorithm>
+#include <chrono>
 
 // Global flag for graceful shutdown
 // extern std::atomic<bool> g_shutdown_requested{false};
@@ -1361,12 +1362,13 @@ bool WebServer::detect_http2_preface(int client_socket) {
 
 void WebServer::handle_http2_connection(int client_socket, const char* initial_data, size_t initial_len) {
     try {
-        // Create HTTP/2 handler
+        // Create HTTP/2 handler (without SSL)
         auto http2_handler = std::make_unique<HTTP2Handler>(
             client_socket, 
             std::shared_ptr<FileHandler>(file_handler.get(), [](FileHandler*) {}),
             performance_metrics,
-            document_root
+            document_root,
+            nullptr  // No SSL for regular HTTP/2
         );
         
         if (!http2_handler->initialize()) {
@@ -1565,18 +1567,257 @@ void WebServer::handle_tls_connection(int client_socket) {
     // Route to appropriate handler based on negotiated protocol
     if (selected_protocol == "h2") {
         safe_cout("Handling HTTP/2 over TLS connection");
-        // TODO: Implement HTTP/2 over TLS with SSL wrapper
-        // For now, inform client about the limitation
-        safe_cout("HTTP/2 over TLS not fully implemented yet");
+        handle_tls_http2_connection(ssl);
     } else {
         safe_cout("Handling HTTP/1.1 over TLS connection");
-        // TODO: Implement HTTP/1.1 over TLS with SSL wrapper
-        // For now, inform client about the limitation  
-        safe_cout("HTTP/1.1 over TLS not fully implemented yet");
+        handle_tls_http_connection(ssl, selected_protocol);
     }
     
     SSL_shutdown(ssl);
     SSL_free(ssl);
+}
+
+void WebServer::handle_tls_http_connection(SSL* ssl, const std::string& selected_protocol) {
+    auto& coordinator = ShutdownCoordinator::instance();
+    bool keep_connection = false;
+    
+    try {
+        do {
+            if (coordinator.is_shutdown_requested()) {
+                break;
+            }
+            
+            auto start_time = std::chrono::high_resolution_clock::now();
+            
+            // Read and parse HTTPS request with timeout
+            std::string headers_data;
+            if (!ssl_read_request_with_timeout(ssl, headers_data, std::chrono::seconds(5))) {
+                break; // Timeout or error
+            }
+            
+            if (coordinator.is_shutdown_requested()) {
+                break;
+            }
+
+            HttpRequest request;
+            if (!request.parse(headers_data)) {
+                if (!coordinator.is_shutdown_requested()) {
+                    std::string response = get_400_response();
+                    ssl_send_response(ssl, response);
+                }
+                break;
+            }
+
+            // Check for WebSocket upgrade over TLS
+            if (is_websocket_path(request.path) && 
+                websocket_handler->is_websocket_request(request.headers) &&
+                !coordinator.is_shutdown_requested()) {
+                
+                // Note: WebSocket over TLS would need additional implementation
+                safe_cout("WebSocket over TLS not supported yet");
+                std::string response = get_400_response();
+                ssl_send_response(ssl, response);
+                break;
+            }
+
+            if (coordinator.is_shutdown_requested()) {
+                break;
+            }
+
+            // Handle regular HTTPS request
+            std::string response = handle_request(request, keep_connection);
+            if (!coordinator.is_shutdown_requested()) {
+                ssl_send_response(ssl, response);
+            }
+
+            auto end_time = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+            
+            int status_code = extract_status_code(response);
+            
+            if (!coordinator.is_shutdown_requested()) {
+                log_request(request.method, request.path + " [TLS]", status_code, duration);
+                record_request_metric(request.method, request.path, status_code, duration.count());
+                total_requests++;
+            }
+
+        } while (keep_connection && keep_alive_enabled && !coordinator.is_shutdown_requested());
+        
+    } catch (const std::exception& e) {
+        if (!coordinator.is_shutdown_requested()) {
+            safe_cout("TLS HTTP client handler exception: " + std::string(e.what()));
+        }
+    }
+}
+
+void WebServer::handle_tls_http2_connection(SSL* ssl) {
+    try {
+        // Create HTTP/2 handler with SSL support
+        auto shared_file_handler = std::shared_ptr<FileHandler>(file_handler.get(), [](FileHandler*) {});
+        auto http2_handler = std::make_unique<HTTP2Handler>(
+            SSL_get_fd(ssl), 
+            shared_file_handler,
+            performance_metrics, 
+            document_root, 
+            ssl);
+        
+        if (!http2_handler->initialize()) {
+            safe_cout("Failed to initialize HTTP/2 over TLS handler");
+            return;
+        }
+        
+        safe_cout("HTTP/2 over TLS connection established");
+        
+        // Note: For HTTP/2 over TLS, the client doesn't send the connection preface
+        // The nghttp2 library handles this automatically for TLS connections
+        
+        // Process HTTP/2 frames over TLS
+        char buffer[8192];
+        while (!g_shutdown_requested && 
+               (http2_handler->session_want_read() || http2_handler->session_want_write())) {
+            
+            if (http2_handler->session_want_read()) {
+                int bytes_received = SSL_read(ssl, buffer, sizeof(buffer));
+                if (bytes_received <= 0) {
+                    int ssl_error = SSL_get_error(ssl, bytes_received);
+                    if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+                        // Non-blocking operation, continue
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        continue;
+                    } else if (ssl_error == SSL_ERROR_ZERO_RETURN) {
+                        safe_cout("HTTP/2 over TLS connection closed by client");
+                        break;
+                    } else {
+                        safe_cout("HTTP/2 over TLS read error: " + std::to_string(ssl_error));
+                        break;
+                    }
+                } else {
+                    // Successfully read data, process it
+                    if (http2_handler->process_data(reinterpret_cast<uint8_t*>(buffer), bytes_received) < 0) {
+                        safe_cout("HTTP/2 over TLS data processing error");
+                        break;
+                    }
+                }
+            }
+            
+            if (http2_handler->session_want_write()) {
+                if (!http2_handler->flush_output()) {
+                    safe_cout("HTTP/2 over TLS output flush error");
+                    break;
+                }
+            }
+            
+            // Small delay to prevent busy waiting
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        
+        safe_cout("HTTP/2 over TLS connection closed");
+        
+    } catch (const std::exception& e) {
+        safe_cout("HTTP/2 over TLS connection error: " + std::string(e.what()));
+    }
+}
+
+// SSL wrapper methods implementation
+bool WebServer::ssl_read_request_with_timeout(SSL* ssl, std::string& headers_data, std::chrono::seconds timeout) {
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    char buffer[4096];
+    
+    while (headers_data.find("\r\n\r\n") == std::string::npos) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            return false; // Timeout
+        }
+        
+        if (ShutdownCoordinator::instance().is_shutdown_requested()) {
+            return false;
+        }
+        
+        // Use SSL_pending and select for timeout on the underlying socket
+        int socket_fd = SSL_get_fd(ssl);
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(socket_fd, &read_fds);
+        
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000; // 100ms
+        
+        int select_result = select(socket_fd + 1, &read_fds, nullptr, nullptr, &tv);
+        if (select_result < 0) {
+            return false; // Error
+        } else if (select_result == 0) {
+            continue; // Timeout, try again
+        }
+        
+        // Data available, try to read
+        int bytes_read = SSL_read(ssl, buffer, sizeof(buffer) - 1);
+        if (bytes_read <= 0) {
+            int ssl_error = SSL_get_error(ssl, bytes_read);
+            if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
+                continue; // Try again
+            }
+            return false; // Real error
+        }
+        
+        buffer[bytes_read] = '\0';
+        headers_data.append(buffer, bytes_read);
+    }
+    
+    return true;
+}
+
+bool WebServer::ssl_send_response(SSL* ssl, const std::string& response) {
+    const char* data = response.c_str();
+    size_t total_sent = 0;
+    size_t total_length = response.length();
+    
+    while (total_sent < total_length) {
+        int bytes_sent = SSL_write(ssl, data + total_sent, total_length - total_sent);
+        if (bytes_sent <= 0) {
+            int ssl_error = SSL_get_error(ssl, bytes_sent);
+            if (ssl_error == SSL_ERROR_WANT_WRITE || ssl_error == SSL_ERROR_WANT_READ) {
+                // Retry
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            return false; // Real error
+        }
+        total_sent += bytes_sent;
+    }
+    
+    return true;
+}
+
+std::string WebServer::ssl_read_request(SSL* ssl, const HttpRequest& parsed_request) {
+    std::string body;
+    
+    // Check if there's a content-length header
+    auto it = parsed_request.headers.find("content-length");
+    if (it != parsed_request.headers.end()) {
+        int content_length = std::stoi(it->second);
+        if (content_length > 0 && content_length < 1024*1024) { // Limit to 1MB
+            char* buffer = new char[content_length + 1];
+            int total_read = 0;
+            
+            while (total_read < content_length) {
+                int bytes_read = SSL_read(ssl, buffer + total_read, content_length - total_read);
+                if (bytes_read <= 0) {
+                    int ssl_error = SSL_get_error(ssl, bytes_read);
+                    if (ssl_error != SSL_ERROR_WANT_READ && ssl_error != SSL_ERROR_WANT_WRITE) {
+                        break; // Error
+                    }
+                    continue; // Retry
+                }
+                total_read += bytes_read;
+            }
+            
+            buffer[total_read] = '\0';
+            body = std::string(buffer, total_read);
+            delete[] buffer;
+        }
+    }
+    
+    return body;
 }
 
 int WebServer::alpn_select_callback(SSL* ssl, const unsigned char** out, unsigned char* outlen,

@@ -114,8 +114,15 @@ private:
     SSL* create_ssl_connection(int client_socket);
     bool perform_alpn_negotiation(SSL* ssl, std::string& selected_protocol);
     void handle_tls_connection(int client_socket);
+    void handle_tls_http_connection(SSL* ssl, const std::string& selected_protocol);
+    void handle_tls_http2_connection(SSL* ssl);
     static int alpn_select_callback(SSL* ssl, const unsigned char** out, unsigned char* outlen,
                                    const unsigned char* in, unsigned int inlen, void* arg);
+    
+    // SSL wrapper methods
+    bool ssl_read_request_with_timeout(SSL* ssl, std::string& headers_data, std::chrono::seconds timeout);
+    bool ssl_send_response(SSL* ssl, const std::string& response);
+    std::string ssl_read_request(SSL* ssl, const HttpRequest& parsed_request);
     
     // HTTP response builders
     std::string build_http_response(int status_code, const std::string& status_text, 

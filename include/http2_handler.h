@@ -2,6 +2,7 @@
 #define HTTP2_HANDLER_H
 
 #include <nghttp2/nghttp2.h>
+#include <openssl/ssl.h>
 #include <memory>
 #include <map>
 #include <string>
@@ -37,10 +38,19 @@ class HTTP2Handler {
 private:
     nghttp2_session* session;
     int socket_fd;
+    SSL* ssl;  // SSL connection for TLS support
+    bool tls_enabled;
     std::map<int32_t, std::unique_ptr<HTTP2Stream>> streams;
     std::shared_ptr<FileHandler> file_handler;
     std::shared_ptr<PerformanceMetrics> performance_metrics;
     std::string document_root;
+    
+    // SSL support
+    SSL* ssl_connection;
+    bool is_tls_connection;
+    
+    // HTTP/2 connection state
+    bool preface_processed;
     
     // Stream priority support
     struct StreamPriority {
@@ -108,7 +118,7 @@ private:
 public:
     HTTP2Handler(int socket_fd, std::shared_ptr<FileHandler> file_handler,
                  std::shared_ptr<PerformanceMetrics> metrics,
-                 const std::string& doc_root);
+                 const std::string& doc_root, SSL* ssl = nullptr);
     ~HTTP2Handler();
     
     // Non-copyable

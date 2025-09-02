@@ -9,9 +9,10 @@ const char HTTP2_CONNECTION_PREFACE[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
 HTTP2Handler::HTTP2Handler(int socket_fd, std::shared_ptr<FileHandler> file_handler,
                            std::shared_ptr<PerformanceMetrics> metrics,
-                           const std::string& doc_root)
+                           const std::string& doc_root, SSL* ssl)
     : session(nullptr), socket_fd(socket_fd), file_handler(file_handler),
-      performance_metrics(metrics), document_root(doc_root) {
+      performance_metrics(metrics), document_root(doc_root), 
+      ssl_connection(ssl), is_tls_connection(ssl != nullptr), preface_processed(false) {
 }
 
 HTTP2Handler::~HTTP2Handler() {
@@ -68,17 +69,22 @@ bool HTTP2Handler::send_settings() {
 }
 
 int HTTP2Handler::process_data(const uint8_t* data, size_t len) {
-    // Check if this is the HTTP/2 connection preface
-    static bool preface_processed = false;
-    if (!preface_processed && len >= 24 && memcmp(data, HTTP2_CONNECTION_PREFACE, 24) == 0) {
-        // Skip the preface and process any remaining data
-        data += 24;
-        len -= 24;
-        preface_processed = true;
-        
-        if (len == 0) {
-            return 24; // Just the preface, nothing more to process
+    // For TLS connections, the preface is handled differently by nghttp2
+    if (!is_tls_connection) {
+        // Check if this is the HTTP/2 connection preface for non-TLS connections
+        if (!preface_processed && len >= 24 && memcmp(data, HTTP2_CONNECTION_PREFACE, 24) == 0) {
+            // Skip the preface and process any remaining data
+            data += 24;
+            len -= 24;
+            preface_processed = true;
+            
+            if (len == 0) {
+                return 24; // Just the preface, nothing more to process
+            }
         }
+    } else {
+        // For TLS connections, mark preface as processed (handled by nghttp2 internally)
+        preface_processed = true;
     }
     
     if (len == 0) {
@@ -95,7 +101,7 @@ int HTTP2Handler::process_data(const uint8_t* data, size_t len) {
         return -1;
     }
     
-    return readlen + (preface_processed ? 24 : 0);
+    return readlen + (!is_tls_connection && preface_processed ? 24 : 0);
 }
 
 bool HTTP2Handler::flush_output() {
@@ -105,12 +111,27 @@ bool HTTP2Handler::flush_output() {
         return false;
     }
     
-    // Send buffered data to socket
+    // Send buffered data to socket (SSL or regular)
     if (!output_buffer.empty()) {
-        ssize_t sent = send(socket_fd, output_buffer.data(), output_buffer.size(), 0);
-        if (sent < 0) {
-            std::cerr << "Failed to send data to socket" << std::endl;
-            return false;
+        ssize_t sent;
+        if (is_tls_connection && ssl_connection) {
+            // Send over SSL connection
+            sent = SSL_write(ssl_connection, output_buffer.data(), output_buffer.size());
+            if (sent <= 0) {
+                int ssl_error = SSL_get_error(ssl_connection, sent);
+                if (ssl_error != SSL_ERROR_WANT_WRITE && ssl_error != SSL_ERROR_WANT_READ) {
+                    std::cerr << "Failed to send data over SSL: " << ssl_error << std::endl;
+                    return false;
+                }
+                return true; // Will retry later
+            }
+        } else {
+            // Send over regular socket
+            sent = send(socket_fd, output_buffer.data(), output_buffer.size(), 0);
+            if (sent < 0) {
+                std::cerr << "Failed to send data to socket" << std::endl;
+                return false;
+            }
         }
         output_buffer.clear();
     }
