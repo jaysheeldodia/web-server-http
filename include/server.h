@@ -11,9 +11,12 @@
 #include <mutex>
 #include <atomic>
 #include <memory>
+#include <vector>
+#include <map>
 #include "http_request.h"
 #include "file_handler.h"
 #include "thread_pool.h"
+#include "json_handler.h"
 
 class WebServer {
 private:
@@ -33,6 +36,11 @@ private:
     // Request logging
     std::atomic<size_t> total_requests;
     mutable std::mutex log_mutex; // Protects console output
+    
+    // API data storage (in-memory for demo purposes)
+    std::vector<std::map<std::string, std::string>> users_data;
+    std::atomic<int> next_user_id;
+    mutable std::mutex data_mutex; // Protects users_data
     
 public:
     WebServer(int port = 8080, const std::string& doc_root = "./www", size_t thread_count = 4);
@@ -54,20 +62,32 @@ public:
     
 private:
     void handle_client_task(int client_socket);
-    std::string read_request(int client_socket);
+    std::string read_request(int client_socket, const HttpRequest& parsed_request);
     void send_response(int client_socket, const std::string& response);
     
     // HTTP response builders
     std::string build_http_response(int status_code, const std::string& status_text, 
                                   const std::string& content_type, const std::string& body, 
-                                  bool keep_alive = false);
+                                  bool keep_alive = false, bool add_cors = false);
     
     // Request handlers
     std::string handle_get_request(const HttpRequest& request, bool& keep_alive);
+    std::string handle_post_request(const HttpRequest& request, bool& keep_alive);
     std::string handle_request(const HttpRequest& request, bool& keep_alive);
     
+    // API endpoint handlers
+    std::string handle_api_request(const HttpRequest& request, bool& keep_alive);
+    std::string handle_users_api(const HttpRequest& request);
+    std::string handle_user_api(const HttpRequest& request, const std::string& user_id);
+    std::string handle_server_stats_api(const HttpRequest& request);
+    std::string handle_api_docs(const HttpRequest& request);
+    
+    // CORS support
+    std::string handle_options_request(const HttpRequest& request);
+    void add_cors_headers(std::string& response);
+    
     // Error responses
-    std::string get_error_response(int status_code, const std::string& status_text, const std::string& message);
+    std::string get_error_response(int status_code, const std::string& status_text, const std::string& message, bool add_cors = false);
     std::string get_404_response();
     std::string get_400_response();
     std::string get_405_response();
@@ -82,6 +102,12 @@ private:
     void log_request(const std::string& method, const std::string& path, int status_code, 
                     const std::chrono::milliseconds& duration) const;
     void safe_cout(const std::string& message) const;
+    
+    // Data management helpers
+    void initialize_sample_data();
+    std::map<std::string, std::string> create_user(const std::string& name, const std::string& email);
+    std::vector<std::string> split_path(const std::string& path) const;
+    bool is_api_path(const std::string& path) const;
 };
 
 #endif // SERVER_H
