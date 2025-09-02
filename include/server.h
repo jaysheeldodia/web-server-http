@@ -90,7 +90,7 @@ private:
     
     // HTTP/2 handling
     bool detect_http2_preface(int client_socket);
-    void handle_http2_connection(int client_socket);
+    void handle_http2_connection(int client_socket, const char* initial_data = nullptr, size_t initial_len = 0);
     bool send_http2_upgrade_response(int client_socket);
     
     // HTTP response builders

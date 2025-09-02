@@ -24,13 +24,14 @@ bool HTTP2Handler::initialize() {
     nghttp2_session_callbacks* callbacks;
     nghttp2_session_callbacks_new(&callbacks);
     
-    setup_callbacks();
-    
+    // Set up all callbacks
     nghttp2_session_callbacks_set_send_callback(callbacks, send_callback);
     nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, on_frame_recv_callback);
     nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, on_stream_close_callback);
     nghttp2_session_callbacks_set_on_header_callback(callbacks, on_header_callback);
     nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks, on_data_chunk_recv_callback);
+    nghttp2_session_callbacks_set_on_frame_send_callback(callbacks, on_frame_send_callback);
+    nghttp2_session_callbacks_set_error_callback(callbacks, on_error_callback);
     
     int rv = nghttp2_session_server_new(&session, callbacks, this);
     nghttp2_session_callbacks_del(callbacks);
@@ -50,8 +51,10 @@ void HTTP2Handler::setup_callbacks() {
 bool HTTP2Handler::send_settings() {
     nghttp2_settings_entry settings[] = {
         {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100},
-        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 65535},
-        {NGHTTP2_SETTINGS_MAX_FRAME_SIZE, 16384}
+        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 65536},
+        {NGHTTP2_SETTINGS_MAX_FRAME_SIZE, 16384},
+        {NGHTTP2_SETTINGS_ENABLE_PUSH, 1},
+        {NGHTTP2_SETTINGS_MAX_HEADER_LIST_SIZE, 8192}
     };
     
     int rv = nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, settings, 
@@ -66,14 +69,20 @@ bool HTTP2Handler::send_settings() {
 
 int HTTP2Handler::process_data(const uint8_t* data, size_t len) {
     // Check if this is the HTTP/2 connection preface
-    if (len >= 24 && memcmp(data, HTTP2_CONNECTION_PREFACE, 24) == 0) {
+    static bool preface_processed = false;
+    if (!preface_processed && len >= 24 && memcmp(data, HTTP2_CONNECTION_PREFACE, 24) == 0) {
         // Skip the preface and process any remaining data
         data += 24;
         len -= 24;
+        preface_processed = true;
         
         if (len == 0) {
             return 24; // Just the preface, nothing more to process
         }
+    }
+    
+    if (len == 0) {
+        return 0;
     }
     
     ssize_t readlen = nghttp2_session_mem_recv(session, data, len);
@@ -86,7 +95,7 @@ int HTTP2Handler::process_data(const uint8_t* data, size_t len) {
         return -1;
     }
     
-    return readlen;
+    return readlen + (preface_processed ? 24 : 0);
 }
 
 bool HTTP2Handler::flush_output() {
@@ -141,9 +150,13 @@ int HTTP2Handler::on_frame_recv_callback(nghttp2_session *session,
                 }
                 if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
                     stream->request_complete = true;
-                    handler->process_request(stream.get());
                 }
                 handler->streams[frame->hd.stream_id] = std::move(stream);
+                
+                // Process request if complete
+                if (handler->streams[frame->hd.stream_id]->request_complete) {
+                    handler->process_request(handler->streams[frame->hd.stream_id].get());
+                }
             }
             break;
         case NGHTTP2_DATA:
@@ -154,6 +167,26 @@ int HTTP2Handler::on_frame_recv_callback(nghttp2_session *session,
                     handler->process_request(it->second.get());
                 }
             }
+            // Send window update to maintain flow control
+            if (frame->data.hd.length > 0) {
+                handler->send_window_update(frame->hd.stream_id, frame->data.hd.length);
+                handler->send_window_update(0, frame->data.hd.length); // Connection window
+            }
+            break;
+        case NGHTTP2_SETTINGS:
+            if (frame->hd.flags & NGHTTP2_FLAG_ACK) {
+                std::cout << "Received SETTINGS ACK" << std::endl;
+            }
+            break;
+        case NGHTTP2_WINDOW_UPDATE:
+            std::cout << "Received WINDOW_UPDATE for stream " << frame->hd.stream_id 
+                     << " increment: " << frame->window_update.window_size_increment << std::endl;
+            break;
+        case NGHTTP2_GOAWAY:
+            std::cout << "Received GOAWAY frame" << std::endl;
+            return NGHTTP2_ERR_CALLBACK_FAILURE; // Signal to close connection
+        default:
+            // Handle other frame types gracefully
             break;
     }
     
@@ -214,6 +247,74 @@ int HTTP2Handler::on_data_chunk_recv_callback(nghttp2_session *session, uint8_t 
     return 0;
 }
 
+int HTTP2Handler::on_frame_send_callback(nghttp2_session *session,
+                                        const nghttp2_frame *frame, void *user_data) {
+    (void)session;
+    (void)user_data;
+    
+    switch (frame->hd.type) {
+        case NGHTTP2_HEADERS:
+            std::cout << "Sent HEADERS frame for stream " << frame->hd.stream_id << std::endl;
+            break;
+        case NGHTTP2_DATA:
+            std::cout << "Sent DATA frame for stream " << frame->hd.stream_id 
+                     << " length: " << frame->data.hd.length << std::endl;
+            break;
+        case NGHTTP2_SETTINGS:
+            if (frame->hd.flags & NGHTTP2_FLAG_ACK) {
+                std::cout << "Sent SETTINGS ACK" << std::endl;
+            } else {
+                std::cout << "Sent SETTINGS frame" << std::endl;
+            }
+            break;
+        default:
+            break;
+    }
+    
+    return 0;
+}
+
+int HTTP2Handler::on_error_callback(nghttp2_session *session, const char *msg,
+                                   size_t len, void *user_data) {
+    (void)session;
+    (void)user_data;
+    
+    std::string error_msg(msg, len);
+    std::cerr << "HTTP/2 error: " << error_msg << std::endl;
+    
+    return 0;
+}
+
+ssize_t HTTP2Handler::data_source_read_callback(nghttp2_session *session, int32_t stream_id,
+                                               uint8_t *buf, size_t length, uint32_t *data_flags,
+                                               nghttp2_data_source *source, void *user_data) {
+    (void)session;
+    (void)user_data;
+    
+    HTTP2Stream* stream = static_cast<HTTP2Stream*>(source->ptr);
+    
+    size_t remaining = stream->response_body.length() - stream->response_data_sent;
+    size_t copy_len = std::min(length, remaining);
+    
+    if (copy_len > 0) {
+        memcpy(buf, stream->response_body.c_str() + stream->response_data_sent, copy_len);
+        stream->response_data_sent += copy_len;
+    }
+    
+    if (stream->response_data_sent >= stream->response_body.length()) {
+        *data_flags = NGHTTP2_DATA_FLAG_EOF;
+    }
+    
+    return copy_len;
+}
+
+void HTTP2Handler::send_window_update(int32_t stream_id, uint32_t window_size_increment) {
+    int rv = nghttp2_submit_window_update(session, NGHTTP2_FLAG_NONE, stream_id, window_size_increment);
+    if (rv != 0) {
+        std::cerr << "Failed to submit window update: " << nghttp2_strerror(rv) << std::endl;
+    }
+}
+
 void HTTP2Handler::process_request(HTTP2Stream* stream) {
     if (!stream->request_complete) {
         return;
@@ -258,56 +359,19 @@ void HTTP2Handler::process_request(HTTP2Stream* stream) {
 }
 
 void HTTP2Handler::send_response(HTTP2Stream* stream) {
-    // Prepare response headers
+    // Prepare response headers with proper memory management
     std::vector<nghttp2_nv> response_headers;
+    std::vector<std::string> header_storage; // Keep strings alive
     
-    // Status header
-    std::string status_str = std::to_string(stream->status_code);
-    nghttp2_nv status_header = {
-        reinterpret_cast<uint8_t*>(const_cast<char*>(":status")),
-        reinterpret_cast<uint8_t*>(const_cast<char*>(status_str.c_str())),
-        7, status_str.length(),
-        NGHTTP2_NV_FLAG_NONE
-    };
-    response_headers.push_back(status_header);
-    
-    // Content-Length header
-    std::string content_length = std::to_string(stream->response_body.length());
-    nghttp2_nv length_header = {
-        reinterpret_cast<uint8_t*>(const_cast<char*>("content-length")),
-        reinterpret_cast<uint8_t*>(const_cast<char*>(content_length.c_str())),
-        14, content_length.length(),
-        NGHTTP2_NV_FLAG_NONE
-    };
-    response_headers.push_back(length_header);
-    
-    // Add other response headers
-    for (const auto& header : stream->response_headers) {
-        nghttp2_nv nv = {
-            reinterpret_cast<uint8_t*>(const_cast<char*>(header.first.c_str())),
-            reinterpret_cast<uint8_t*>(const_cast<char*>(header.second.c_str())),
-            header.first.length(), header.second.length(),
-            NGHTTP2_NV_FLAG_NONE
-        };
-        response_headers.push_back(nv);
+    if (!create_response_headers(stream, response_headers, header_storage)) {
+        std::cerr << "Failed to create response headers" << std::endl;
+        return;
     }
     
-    // Submit response headers
+    // Submit response headers with data
     nghttp2_data_provider data_prd;
     data_prd.source.ptr = stream;
-    data_prd.read_callback = [](nghttp2_session *session, int32_t stream_id,
-                               uint8_t *buf, size_t length, uint32_t *data_flags,
-                               nghttp2_data_source *source, void *user_data) -> ssize_t {
-        (void)session;
-        (void)stream_id;
-        (void)user_data;
-        
-        HTTP2Stream* stream = static_cast<HTTP2Stream*>(source->ptr);
-        size_t copy_len = std::min(length, stream->response_body.length());
-        memcpy(buf, stream->response_body.c_str(), copy_len);
-        *data_flags = NGHTTP2_DATA_FLAG_EOF;
-        return copy_len;
-    };
+    data_prd.read_callback = data_source_read_callback;
     
     int rv = nghttp2_submit_response(session, stream->stream_id,
                                     response_headers.data(), response_headers.size(),
@@ -315,6 +379,53 @@ void HTTP2Handler::send_response(HTTP2Stream* stream) {
     if (rv != 0) {
         std::cerr << "Failed to submit response: " << nghttp2_strerror(rv) << std::endl;
     }
+}
+
+bool HTTP2Handler::create_response_headers(HTTP2Stream* stream, std::vector<nghttp2_nv>& headers,
+                                          std::vector<std::string>& header_storage) {
+    // Prepare header strings that will stay alive
+    header_storage.clear();
+    headers.clear();
+    
+    // Status header
+    header_storage.push_back(":status");
+    header_storage.push_back(std::to_string(stream->status_code));
+    
+    nghttp2_nv status_header;
+    status_header.name = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-2].c_str()));
+    status_header.value = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-1].c_str()));
+    status_header.namelen = header_storage[header_storage.size()-2].length();
+    status_header.valuelen = header_storage[header_storage.size()-1].length();
+    status_header.flags = NGHTTP2_NV_FLAG_NONE;
+    headers.push_back(status_header);
+    
+    // Content-Length header
+    header_storage.push_back("content-length");
+    header_storage.push_back(std::to_string(stream->response_body.length()));
+    
+    nghttp2_nv length_header;
+    length_header.name = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-2].c_str()));
+    length_header.value = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-1].c_str()));
+    length_header.namelen = header_storage[header_storage.size()-2].length();
+    length_header.valuelen = header_storage[header_storage.size()-1].length();
+    length_header.flags = NGHTTP2_NV_FLAG_NONE;
+    headers.push_back(length_header);
+    
+    // Add other response headers
+    for (const auto& header : stream->response_headers) {
+        header_storage.push_back(header.first);
+        header_storage.push_back(header.second);
+        
+        nghttp2_nv nv;
+        nv.name = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-2].c_str()));
+        nv.value = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-1].c_str()));
+        nv.namelen = header_storage[header_storage.size()-2].length();
+        nv.valuelen = header_storage[header_storage.size()-1].length();
+        nv.flags = NGHTTP2_NV_FLAG_NONE;
+        headers.push_back(nv);
+    }
+    
+    return true;
 }
 
 std::string HTTP2Handler::get_content_type(const std::string& path) {

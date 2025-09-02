@@ -255,19 +255,23 @@ void WebServer::handle_client_task(int client_socket) {
             // Check if this is HTTP/2 preface
             if (http2_enabled && initial_bytes >= 24 && 
                 memcmp(buffer, HTTP2_CONNECTION_PREFACE, 24) == 0) {
-                // Handle as HTTP/2 connection
-                safe_cout("HTTP/2 connection detected - preface matched");
-                handle_http2_connection(client_socket);
+                // Handle as HTTP/2 connection - pass the initial data
+                safe_cout("🔵 HTTP/2 connection detected - preface matched");
+                handle_http2_connection(client_socket, buffer, initial_bytes);
+                safe_cout("🔵 HTTP/2 handler returned - connection closed");
                 break;
             } else if (http2_enabled) {
                 // Debug: show what we received instead
-                std::string debug_msg = "Not HTTP/2 preface. Received " + std::to_string(initial_bytes) + " bytes: ";
+                std::string debug_msg = "🔴 Not HTTP/2 preface. Received " + std::to_string(initial_bytes) + " bytes: ";
                 for (int i = 0; i < std::min(initial_bytes, 24L); i++) {
                     char hex[4];
                     snprintf(hex, sizeof(hex), "%02x ", (unsigned char)buffer[i]);
                     debug_msg += hex;
                 }
                 safe_cout(debug_msg);
+                
+                // Compare with expected preface
+                safe_cout("🔴 Expected preface: 50 52 49 20 2a 20 48 54 54 50 2f 32 2e 30 0d 0a 0d 0a 53 4d 0d 0a 0d 0a");
             }
             
             // Handle as HTTP/1.1 - continue reading headers if needed
@@ -1320,10 +1324,8 @@ bool WebServer::detect_http2_preface(int client_socket) {
     return false;
 }
 
-void WebServer::handle_http2_connection(int client_socket) {
+void WebServer::handle_http2_connection(int client_socket, const char* initial_data, size_t initial_len) {
     try {
-        // Note: The HTTP/2 connection preface has already been consumed in handle_client_task
-        
         // Create HTTP/2 handler
         auto http2_handler = std::make_unique<HTTP2Handler>(
             client_socket, 
@@ -1338,6 +1340,14 @@ void WebServer::handle_http2_connection(int client_socket) {
         }
         
         safe_cout("HTTP/2 connection established");
+        
+        // Process initial data if provided (contains the preface and possibly more)
+        if (initial_data && initial_len > 0) {
+            if (http2_handler->process_data(reinterpret_cast<const uint8_t*>(initial_data), initial_len) < 0) {
+                safe_cout("HTTP/2 initial data processing error");
+                return;
+            }
+        }
         
         // Process HTTP/2 frames
         char buffer[8192];

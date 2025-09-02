@@ -19,6 +19,9 @@ debug_test
 load_tester
 server_tester
 test_preface
+debug_preface
+http2_test
+simple_http2_test
 
 # Build directories
 build/

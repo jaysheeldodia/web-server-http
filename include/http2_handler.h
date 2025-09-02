@@ -22,9 +22,10 @@ struct HTTP2Stream {
     std::string response_body;
     std::map<std::string, std::string> response_headers;
     int status_code;
+    size_t response_data_sent;
     
     HTTP2Stream(int32_t id) : stream_id(id), headers_complete(false), 
-                             request_complete(false), status_code(200) {}
+                             request_complete(false), status_code(200), response_data_sent(0) {}
 };
 
 class HTTP2Handler {
@@ -53,6 +54,13 @@ private:
     static int on_data_chunk_recv_callback(nghttp2_session *session, uint8_t flags,
                                           int32_t stream_id, const uint8_t *data,
                                           size_t len, void *user_data);
+    static int on_frame_send_callback(nghttp2_session *session,
+                                     const nghttp2_frame *frame, void *user_data);
+    static int on_error_callback(nghttp2_session *session, const char *msg,
+                                size_t len, void *user_data);
+    static ssize_t data_source_read_callback(nghttp2_session *session, int32_t stream_id,
+                                           uint8_t *buf, size_t length, uint32_t *data_flags,
+                                           nghttp2_data_source *source, void *user_data);
     
     // Helper methods
     void setup_callbacks();
@@ -60,6 +68,9 @@ private:
     std::string build_response(HTTP2Stream* stream);
     std::string get_content_type(const std::string& path);
     void send_response(HTTP2Stream* stream);
+    bool create_response_headers(HTTP2Stream* stream, std::vector<nghttp2_nv>& headers,
+                                std::vector<std::string>& header_storage);
+    void send_window_update(int32_t stream_id, uint32_t window_size_increment);
     
 public:
     HTTP2Handler(int socket_fd, std::shared_ptr<FileHandler> file_handler,
