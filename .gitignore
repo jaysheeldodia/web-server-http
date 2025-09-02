@@ -18,6 +18,7 @@ webserver
 debug_test
 load_tester
 server_tester
+test_preface
 
 # Build directories
 build/

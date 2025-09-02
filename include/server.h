@@ -18,6 +18,7 @@
 #include "thread_pool.h"
 #include "json_handler.h"
 #include "websocket_handler.h"
+#include "http2_handler.h"
 
 class WebServer {
 private:
@@ -49,6 +50,9 @@ private:
     std::thread metrics_thread;
     std::atomic<bool> metrics_running;
     
+    // HTTP/2 support
+    std::atomic<bool> http2_enabled;
+    
 public:
     WebServer(int port = 8080, const std::string& doc_root = "./www", size_t thread_count = 4);
     ~WebServer();
@@ -71,6 +75,10 @@ public:
     void enable_keep_alive(bool enable, int timeout_seconds = 5);
     void manage_connections(); // Should be called periodically
     
+    // HTTP/2 support
+    void enable_http2(bool enable);
+    bool is_http2_enabled() const { return http2_enabled.load(); }
+    
     // Statistics
     size_t get_total_requests() const { return total_requests.load(); }
     size_t get_active_connections() const;
@@ -79,6 +87,11 @@ private:
     void handle_client_task(int client_socket);
     std::string read_request(int client_socket, const HttpRequest& parsed_request);
     void send_response(int client_socket, const std::string& response);
+    
+    // HTTP/2 handling
+    bool detect_http2_preface(int client_socket);
+    void handle_http2_connection(int client_socket);
+    bool send_http2_upgrade_response(int client_socket);
     
     // HTTP response builders
     std::string build_http_response(int status_code, const std::string& status_text, 

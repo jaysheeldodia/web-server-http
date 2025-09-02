@@ -54,7 +54,7 @@ static ResourceManager g_resource_manager;
 WebServer::WebServer(int port, const std::string& doc_root, size_t thread_count) 
     : server_fd(-1), port(port), document_root(doc_root), 
       keep_alive_enabled(false), connection_timeout(5), total_requests(0), next_user_id(1),
-      metrics_running(false) {
+      metrics_running(false), http2_enabled(false) {
     
     memset(&address, 0, sizeof(address));
     file_handler = std::make_unique<FileHandler>(document_root);
@@ -237,10 +237,40 @@ void WebServer::handle_client_task(int client_socket) {
             
             auto start_time = std::chrono::high_resolution_clock::now();
             
-            // Read and parse HTTP request
+            // Read initial data to determine protocol
             std::string headers_data;
             char buffer[4096];
+            ssize_t initial_bytes = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
             
+            if (initial_bytes <= 0) {
+                if (initial_bytes < 0 && errno != EAGAIN && errno != EWOULDBLOCK && !g_shutdown_requested) {
+                    std::cerr << "Initial recv failed: " << strerror(errno) << std::endl;
+                }
+                break;
+            }
+            
+            buffer[initial_bytes] = '\0';
+            headers_data = std::string(buffer);
+            
+            // Check if this is HTTP/2 preface
+            if (http2_enabled && initial_bytes >= 24 && 
+                memcmp(buffer, HTTP2_CONNECTION_PREFACE, 24) == 0) {
+                // Handle as HTTP/2 connection
+                safe_cout("HTTP/2 connection detected - preface matched");
+                handle_http2_connection(client_socket);
+                break;
+            } else if (http2_enabled) {
+                // Debug: show what we received instead
+                std::string debug_msg = "Not HTTP/2 preface. Received " + std::to_string(initial_bytes) + " bytes: ";
+                for (int i = 0; i < std::min(initial_bytes, 24L); i++) {
+                    char hex[4];
+                    snprintf(hex, sizeof(hex), "%02x ", (unsigned char)buffer[i]);
+                    debug_msg += hex;
+                }
+                safe_cout(debug_msg);
+            }
+            
+            // Handle as HTTP/1.1 - continue reading headers if needed
             while (headers_data.find("\r\n\r\n") == std::string::npos && !g_shutdown_requested) {
                 ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
                 
@@ -541,6 +571,18 @@ void WebServer::remove_connection_safe(int socket) {
 
 std::string WebServer::handle_request(const HttpRequest& request, bool& keep_alive) {
     keep_alive = should_keep_alive(request);
+    
+    // Check for HTTP/2 upgrade request
+    if (http2_enabled && request.method == "GET" && 
+        request.get_header("upgrade") == "h2c" && 
+        request.get_header("connection").find("Upgrade") != std::string::npos) {
+        
+        keep_alive = false; // Connection will be upgraded, not kept alive
+        return "HTTP/1.1 101 Switching Protocols\r\n"
+               "Connection: Upgrade\r\n"
+               "Upgrade: h2c\r\n"
+               "\r\n";
+    }
     
     if (request.method == "GET") {
         return handle_get_request(request, keep_alive);
@@ -1243,4 +1285,102 @@ void WebServer::record_request_metric(const std::string& method, const std::stri
     if (performance_metrics && !g_shutdown_requested) {
         performance_metrics->record_request(method, path, status_code, response_time_ms);
     }
+}
+
+// HTTP/2 Support Implementation
+void WebServer::enable_http2(bool enable) {
+    http2_enabled = enable;
+    if (enable) {
+        safe_cout("HTTP/2 support enabled");
+    } else {
+        safe_cout("HTTP/2 support disabled");
+    }
+}
+
+bool WebServer::detect_http2_preface(int client_socket) {
+    char buffer[24]; // HTTP/2 connection preface is 24 bytes
+    
+    // Set a short timeout for preface detection
+    struct timeval timeout;
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+    setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    
+    ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer), MSG_PEEK);
+    
+    // Reset timeout to default
+    timeout.tv_sec = 30;
+    timeout.tv_usec = 0;
+    setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    
+    if (bytes_received == 24) {
+        return memcmp(buffer, HTTP2_CONNECTION_PREFACE, 24) == 0;
+    }
+    
+    return false;
+}
+
+void WebServer::handle_http2_connection(int client_socket) {
+    try {
+        // Note: The HTTP/2 connection preface has already been consumed in handle_client_task
+        
+        // Create HTTP/2 handler
+        auto http2_handler = std::make_unique<HTTP2Handler>(
+            client_socket, 
+            std::shared_ptr<FileHandler>(file_handler.get(), [](FileHandler*) {}),
+            performance_metrics,
+            document_root
+        );
+        
+        if (!http2_handler->initialize()) {
+            safe_cout("Failed to initialize HTTP/2 handler");
+            return;
+        }
+        
+        safe_cout("HTTP/2 connection established");
+        
+        // Process HTTP/2 frames
+        char buffer[8192];
+        while (!g_shutdown_requested && 
+               (http2_handler->session_want_read() || http2_handler->session_want_write())) {
+            
+            if (http2_handler->session_want_read()) {
+                ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
+                if (bytes_received <= 0) {
+                    if (bytes_received < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                        safe_cout("HTTP/2 connection read error");
+                    }
+                    break;
+                }
+                
+                if (http2_handler->process_data(reinterpret_cast<uint8_t*>(buffer), bytes_received) < 0) {
+                    safe_cout("HTTP/2 data processing error");
+                    break;
+                }
+            }
+            
+            if (http2_handler->session_want_write()) {
+                if (!http2_handler->flush_output()) {
+                    safe_cout("HTTP/2 output flush error");
+                    break;
+                }
+            }
+        }
+        
+        safe_cout("HTTP/2 connection closed");
+        
+    } catch (const std::exception& e) {
+        safe_cout("HTTP/2 connection error: " + std::string(e.what()));
+    }
+}
+
+bool WebServer::send_http2_upgrade_response(int client_socket) {
+    std::string upgrade_response = 
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: h2c\r\n"
+        "\r\n";
+    
+    ssize_t sent = send(client_socket, upgrade_response.c_str(), upgrade_response.length(), 0);
+    return sent == static_cast<ssize_t>(upgrade_response.length());
 }

@@ -218,6 +218,9 @@ int main(int argc, char* argv[]) {
         if (keep_alive_enabled) {
             server.enable_keep_alive(true, keep_alive_timeout);
         }
+        
+        // Enable HTTP/2 support
+        server.enable_http2(true);
 
         if (!server.initialize()) {
             std::cerr << "Failed to initialize server" << std::endl;
