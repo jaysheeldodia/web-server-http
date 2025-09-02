@@ -3,15 +3,52 @@
 #include <signal.h>
 #include <thread>
 #include <chrono>
+#include <future>
+#include <atomic>
+#include "../include/globals.h"
+
 
 WebServer* server_instance = nullptr;
+std::atomic<bool> g_shutdown_requested{false};
 
 // Signal handler for graceful shutdown
 void signal_handler(int signal) {
-    std::cout << "\nReceived signal " << signal << ". Shutting down gracefully..." << std::endl;
-    if (server_instance) {
-        server_instance->cleanup();
+    static bool shutdown_in_progress = false;
+    
+    if (shutdown_in_progress) {
+        // Force exit if already shutting down
+        std::cout << "\nForce exit requested!" << std::endl;
+        _exit(1);
     }
+    
+    shutdown_in_progress = true;
+    g_shutdown_requested = true;
+    
+    std::cout << "\nReceived signal " << signal << ". Shutting down gracefully..." << std::endl;
+    
+    if (server_instance) {
+        // Start cleanup in a separate thread to avoid deadlock
+        std::thread cleanup_thread([&]() {
+            try {
+                server_instance->cleanup();
+            } catch (const std::exception& e) {
+                std::cerr << "Cleanup error: " << e.what() << std::endl;
+            }
+        });
+        
+        // Give cleanup thread 5 seconds to complete
+        if (cleanup_thread.joinable()) {
+            auto future = std::async(std::launch::async, [&]() {
+                cleanup_thread.join();
+            });
+            
+            if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
+                std::cout << "Cleanup timeout - forcing exit" << std::endl;
+                cleanup_thread.detach();
+            }
+        }
+    }
+    
     exit(0);
 }
 
@@ -49,23 +86,31 @@ void monitor_server_stats() {
     auto start_time = std::chrono::steady_clock::now();
     size_t last_request_count = 0;
     
-    while (server_instance) {
+    while (server_instance && !g_shutdown_requested) {
         std::this_thread::sleep_for(std::chrono::seconds(30)); // Report every 30 seconds
         
-        if (!server_instance) break;
+        if (!server_instance || g_shutdown_requested) break;
         
-        auto now = std::chrono::steady_clock::now();
-        auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
-        size_t current_requests = server_instance->get_total_requests();
-        size_t requests_per_30s = current_requests - last_request_count;
-        
-        std::cout << "\n=== Server Stats (Uptime: " << uptime << "s) ===" << std::endl;
-        std::cout << "Total requests: " << current_requests << std::endl;
-        std::cout << "Requests/30s: " << requests_per_30s << std::endl;
-        std::cout << "Avg requests/s: " << (uptime > 0 ? current_requests / uptime : 0) << std::endl;
-        std::cout << "==============================" << std::endl;
-        
-        last_request_count = current_requests;
+        try {
+            auto now = std::chrono::steady_clock::now();
+            auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+            size_t current_requests = server_instance->get_total_requests();
+            size_t requests_per_30s = current_requests - last_request_count;
+            
+            std::cout << "\n=== Server Stats (Uptime: " << uptime << "s) ===" << std::endl;
+            std::cout << "Total requests: " << current_requests << std::endl;
+            std::cout << "Requests/30s: " << requests_per_30s << std::endl;
+            std::cout << "Active connections: " << server_instance->get_active_connections() << std::endl;
+            std::cout << "Avg requests/s: " << (uptime > 0 ? current_requests / uptime : 0) << std::endl;
+            std::cout << "==============================" << std::endl;
+            
+            last_request_count = current_requests;
+        } catch (const std::exception& e) {
+            if (!g_shutdown_requested) {
+                std::cerr << "Stats monitoring error: " << e.what() << std::endl;
+            }
+            break;
+        }
     }
 }
 
@@ -74,7 +119,7 @@ int main(int argc, char* argv[]) {
     int port = 8080;
     std::string doc_root = "./www";
     size_t thread_count = 4;
-    bool keep_alive_enabled = true;  // Enable Keep-Alive by default
+    bool keep_alive_enabled = true;
     int keep_alive_timeout = 5;
 
     // Parse command line arguments
@@ -152,41 +197,63 @@ int main(int argc, char* argv[]) {
     }
 
     // Set up signal handlers for graceful shutdown
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
+    struct sigaction sa;
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
     signal(SIGPIPE, SIG_IGN); // Ignore broken pipe signals
 
     // Print configuration
     print_server_info(port, doc_root, thread_count, keep_alive_enabled, keep_alive_timeout);
 
     // Create and initialize server
-    WebServer server(port, doc_root, thread_count);
-    server_instance = &server;
-
-    // Enable Keep-Alive if requested
-    if (keep_alive_enabled) {
-        server.enable_keep_alive(true, keep_alive_timeout);
-    }
-
-    if (!server.initialize()) {
-        std::cerr << "Failed to initialize server" << std::endl;
-        return 1;
-    }
-
-    // Start monitoring thread for server statistics
-    std::thread stats_thread(monitor_server_stats);
-    stats_thread.detach();
-
-    // Start the server (this will run indefinitely)
     try {
-        std::cout << "\nServer ready! Access it at http://localhost:" << port << std::endl;
-        std::cout << "Press Ctrl+C to stop the server\n" << std::endl;
+        WebServer server(port, doc_root, thread_count);
+        server_instance = &server;
+
+        // Enable Keep-Alive if requested
+        if (keep_alive_enabled) {
+            server.enable_keep_alive(true, keep_alive_timeout);
+        }
+
+        if (!server.initialize()) {
+            std::cerr << "Failed to initialize server" << std::endl;
+            return 1;
+        }
+
+        // Start monitoring thread for server statistics
+        std::thread stats_thread;
+        try {
+            stats_thread = std::thread(monitor_server_stats);
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to start stats thread: " << e.what() << std::endl;
+        }
+
+        // Start the server (this will run until shutdown)
+        std::cout << "\nServer ready! Access it at:" << std::endl;
+        std::cout << "  Web Interface: http://localhost:" << port << std::endl;
+        std::cout << "  API Docs: http://localhost:" << port << "/api/docs" << std::endl;
+        std::cout << "  Dashboard: http://localhost:" << port << "/dashboard" << std::endl;
+        std::cout << "  WebSocket: ws://localhost:" << port << "/ws" << std::endl;
+        std::cout << "\nPress Ctrl+C to stop the server\n" << std::endl;
         
         server.start();
+        
+        // Clean up stats thread
+        if (stats_thread.joinable()) {
+            stats_thread.detach(); // Let it finish on its own
+        }
+        
     } catch (const std::exception& e) {
         std::cerr << "Server error: " << e.what() << std::endl;
+        g_shutdown_requested = true;
         return 1;
     }
 
+    server_instance = nullptr;
+    std::cout << "Server shutdown complete." << std::endl;
     return 0;
 }

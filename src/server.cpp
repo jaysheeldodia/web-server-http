@@ -1,18 +1,70 @@
 #include "../include/server.h"
+#include "../include/shutdown_coordinator.h"
 #include <iostream>
 #include <cstring>
 #include <errno.h>
 #include <thread>
 #include <sstream>
+#include <fcntl.h>
+#include <sys/socket.h>
 #include <iomanip>
+#include "../include/globals.h"
+#include <atomic>
 #include <algorithm>
+
+// Global flag for graceful shutdown
+// extern std::atomic<bool> g_shutdown_requested{false};
+
+class ResourceManager {
+private:
+    std::vector<int> sockets;
+    mutable std::mutex sockets_mutex;
+    
+public:
+    void register_socket(int socket) {
+        std::lock_guard<std::mutex> lock(sockets_mutex);
+        sockets.push_back(socket);
+    }
+    
+    void unregister_socket(int socket) {
+        std::lock_guard<std::mutex> lock(sockets_mutex);
+        sockets.erase(std::remove(sockets.begin(), sockets.end(), socket), sockets.end());
+    }
+    
+    void close_all_sockets() {
+        std::lock_guard<std::mutex> lock(sockets_mutex);
+        for (int socket : sockets) {
+            if (socket >= 0) {
+                shutdown(socket, SHUT_RDWR); // Graceful shutdown
+                close(socket);
+            }
+        }
+        sockets.clear();
+    }
+    
+    size_t socket_count() const {
+        std::lock_guard<std::mutex> lock(sockets_mutex);
+        return sockets.size();
+    }
+};
+
+// Global resource manager instance
+static ResourceManager g_resource_manager;
 
 WebServer::WebServer(int port, const std::string& doc_root, size_t thread_count) 
     : server_fd(-1), port(port), document_root(doc_root), 
-      keep_alive_enabled(false), connection_timeout(5), total_requests(0), next_user_id(1) {
+      keep_alive_enabled(false), connection_timeout(5), total_requests(0), next_user_id(1),
+      metrics_running(false) {
+    
     memset(&address, 0, sizeof(address));
     file_handler = std::make_unique<FileHandler>(document_root);
     thread_pool = std::make_unique<ThreadPool>(thread_count);
+    
+    // Initialize performance metrics and WebSocket handler
+    performance_metrics = std::make_shared<PerformanceMetrics>();
+    websocket_handler = std::make_unique<WebSocketHandler>();
+    websocket_handler->set_metrics(performance_metrics);
+    
     initialize_sample_data();
 }
 
@@ -51,7 +103,7 @@ bool WebServer::initialize() {
     }
 
     // Start listening for connections
-    if (listen(server_fd, 128) < 0) { // Increased backlog
+    if (listen(server_fd, 128) < 0) {
         std::cerr << "Listen failed: " << strerror(errno) << std::endl;
         close(server_fd);
         server_fd = -1;
@@ -60,66 +112,115 @@ bool WebServer::initialize() {
 
     safe_cout("Server initialized on port " + std::to_string(port));
     safe_cout("API endpoints available at /api/");
+    safe_cout("Performance Dashboard: http://localhost:" + std::to_string(port) + "/dashboard");
     return true;
 }
 
 void WebServer::start() {
+    auto& coordinator = ShutdownCoordinator::instance();
+    
     safe_cout("Server starting on http://localhost:" + std::to_string(port));
     safe_cout("Document root: " + document_root);
     safe_cout("Thread pool size: " + std::to_string(thread_pool->get_thread_count()));
     safe_cout("Keep-Alive: " + std::string(keep_alive_enabled ? "enabled" : "disabled"));
-    safe_cout("API Documentation: http://localhost:" + std::to_string(port) + "/api/docs");
-    safe_cout("Press Ctrl+C to stop the server");
 
-    // Start connection cleanup thread if keep-alive is enabled
+    // Start WebSocket handler and metrics collection
+    websocket_handler->start();
+    start_metrics_collection();
+
+    // Start connection cleanup thread 
     std::thread cleanup_thread;
     if (keep_alive_enabled) {
         cleanup_thread = std::thread([this]() {
-            while (keep_alive_enabled) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+            auto& coord = ShutdownCoordinator::instance();
+            
+            while (!coord.is_shutdown_requested()) {
+                if (coord.wait_for_shutdown(std::chrono::seconds(1))) {
+                    break; // Shutdown requested
+                }
                 manage_connections();
             }
+            
+            coord.thread_exiting();
         });
+        
+        // Note: Simplified thread management without registration for now
     }
 
-    while (true) {
+    // Main accept loop with proper shutdown handling
+    while (!coordinator.is_shutdown_requested()) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
         
+        // Use select or poll for non-blocking accept with timeout
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(server_fd, &read_fds);
+        
+        struct timeval timeout;
+        timeout.tv_sec = 1;  // 1 second timeout
+        timeout.tv_usec = 0;
+        
+        int select_result = select(server_fd + 1, &read_fds, nullptr, nullptr, &timeout);
+        
+        if (select_result < 0) {
+            if (errno == EINTR) {
+                continue; // Interrupted by signal, check shutdown
+            }
+            std::cerr << "Select failed: " << strerror(errno) << std::endl;
+            break;
+        }
+        
+        if (select_result == 0) {
+            continue; // Timeout, check shutdown and continue
+        }
+        
+        if (!FD_ISSET(server_fd, &read_fds)) {
+            continue; // Not our socket
+        }
+        
         int client_socket = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+        
         if (client_socket < 0) {
-            if (errno == EINTR) continue; // Interrupted by signal
+            if (errno == EINTR || coordinator.is_shutdown_requested()) {
+                break;
+            }
             std::cerr << "Accept failed: " << strerror(errno) << std::endl;
             continue;
         }
 
-        // Set socket timeout for safety
-        struct timeval timeout;
-        timeout.tv_sec = 30; // 30 second timeout
-        timeout.tv_usec = 0;
-        setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-        setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
-        std::ostringstream oss;
-        oss << "New connection from " << inet_ntoa(client_addr.sin_addr) 
-            << ":" << ntohs(client_addr.sin_port) 
-            << " (queue size: " << thread_pool->get_queue_size() << ")";
-        safe_cout(oss.str());
-
-        // Add to connection tracking if keep-alive is enabled
-        if (keep_alive_enabled) {
-            add_connection(client_socket);
+        if (coordinator.is_shutdown_requested()) {
+            close(client_socket);
+            break;
         }
 
-        // Add client handling to thread pool
+        // Register socket for cleanup
+        g_resource_manager.register_socket(client_socket);
+
+        // Set socket timeout for safety
+        struct timeval sock_timeout;
+        sock_timeout.tv_sec = 30;
+        sock_timeout.tv_usec = 0;
+        setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &sock_timeout, sizeof(sock_timeout));
+        setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, &sock_timeout, sizeof(sock_timeout));
+
+        // Add to connection tracking
+        if (keep_alive_enabled) {
+            add_connection_safe(client_socket);
+        }
+
+        // Add client handling to thread pool with resource cleanup
         thread_pool->enqueue([this, client_socket]() {
-            this->handle_client_task(client_socket);
+            this->handle_client_task_safe(client_socket);
         });
     }
 
-    // Clean up connection management thread
-    if (cleanup_thread.joinable()) {
-        cleanup_thread.join();
+    safe_cout("Server shutting down...");
+    
+    // Wait for cleanup thread to finish
+    if (!coordinator.wait_for_all_threads(std::chrono::seconds(5))) {
+        safe_cout("Warning: Some threads did not exit gracefully, forcing shutdown");
+        coordinator.force_shutdown_threads();
     }
 }
 
@@ -129,121 +230,314 @@ void WebServer::handle_client_task(int client_socket) {
     
     try {
         do {
+            // Check for shutdown
+            if (g_shutdown_requested) {
+                break;
+            }
+            
             auto start_time = std::chrono::high_resolution_clock::now();
             
-            // First, read headers to parse the request
+            // Read and parse HTTP request
             std::string headers_data;
             char buffer[4096];
             
-            // Read until we have complete headers (look for \r\n\r\n)
-            while (headers_data.find("\r\n\r\n") == std::string::npos) {
+            while (headers_data.find("\r\n\r\n") == std::string::npos && !g_shutdown_requested) {
                 ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
                 
                 if (bytes_received > 0) {
                     buffer[bytes_received] = '\0';
                     headers_data += std::string(buffer);
                     
-                    // Prevent excessive memory usage
-                    if (headers_data.size() > 8192) { // 8KB limit for headers
-                        break;
-                    }
+                    if (headers_data.size() > 8192) break; // Prevent abuse
                 } else if (bytes_received == 0) {
                     // Client closed connection
                     break;
                 } else {
-                    // Error occurred
-                    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    if (errno != EAGAIN && errno != EWOULDBLOCK && !g_shutdown_requested) {
                         std::cerr << "Recv failed: " << strerror(errno) << std::endl;
                     }
                     break;
                 }
             }
             
-            if (headers_data.empty()) {
-                std::ostringstream oss;
-                oss << "[Thread " << thread_id << "] Empty request received";
-                safe_cout(oss.str());
+            if (headers_data.empty() || g_shutdown_requested) {
                 break;
             }
 
-            // Parse HTTP request headers first
             HttpRequest request;
             if (!request.parse(headers_data)) {
-                std::ostringstream oss;
-                oss << "[Thread " << thread_id << "] Failed to parse HTTP request";
-                safe_cout(oss.str());
-                
-                std::string response = get_400_response();
-                send_response(client_socket, response);
-                
-                auto end_time = std::chrono::high_resolution_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-                log_request("INVALID", "INVALID", 400, duration);
+                if (!g_shutdown_requested) {
+                    std::string response = get_400_response();
+                    send_response(client_socket, response);
+                    
+                    auto end_time = std::chrono::high_resolution_clock::now();
+                    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+                    log_request("INVALID", "INVALID", 400, duration);
+                    record_request_metric("INVALID", "INVALID", 400, duration.count());
+                }
                 break;
             }
 
-            // For POST requests, we might need to read the body if it wasn't fully received
-            if ((request.method == "POST" || request.method == "PUT") && request.get_content_length() > 0) {
-                size_t expected_length = request.get_content_length();
-                size_t current_body_length = request.body.length();
+            // Check for WebSocket upgrade request
+            if (is_websocket_path(request.path) && 
+                websocket_handler->is_websocket_request(request.headers) &&
+                !g_shutdown_requested) {
                 
-                if (current_body_length < expected_length) {
-                    // Read remaining body
-                    size_t remaining = expected_length - current_body_length;
-                    std::string additional_body;
-                    
-                    while (additional_body.length() < remaining) {
-                        ssize_t bytes_received = recv(client_socket, buffer, 
-                                                    std::min(sizeof(buffer) - 1, remaining - additional_body.length()), 0);
-                        if (bytes_received > 0) {
-                            buffer[bytes_received] = '\0';
-                            additional_body += std::string(buffer);
-                        } else {
-                            break; // Timeout or error
-                        }
-                    }
-                    
-                    request.body += additional_body;
+                if (handle_websocket_upgrade(client_socket, request)) {
+                    // WebSocket connection established - don't close socket here
+                    remove_connection(client_socket);
+                    return; // Exit without closing socket
+                } else {
+                    break; // Failed to upgrade, close connection
                 }
             }
 
-            // Handle the request
+            if (g_shutdown_requested) {
+                break;
+            }
+
+            // Handle regular HTTP request
             std::string response = handle_request(request, keep_connection);
-            send_response(client_socket, response);
+            if (!g_shutdown_requested) {
+                send_response(client_socket, response);
+            }
             
-            // Update connection timestamp if keeping alive
-            if (keep_connection && keep_alive_enabled) {
+            if (keep_connection && keep_alive_enabled && !g_shutdown_requested) {
                 update_connection_timestamp(client_socket);
             }
 
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
             
-            // Extract status code from response (basic parsing)
             int status_code = 200;
             if (response.find("404") != std::string::npos) status_code = 404;
             else if (response.find("400") != std::string::npos) status_code = 400;
             else if (response.find("405") != std::string::npos) status_code = 405;
             
-            log_request(request.method, request.path, status_code, duration);
-            total_requests++;
+            if (!g_shutdown_requested) {
+                log_request(request.method, request.path, status_code, duration);
+                record_request_metric(request.method, request.path, status_code, duration.count());
+                total_requests++;
+            }
 
-        } while (keep_connection && keep_alive_enabled);
+        } while (keep_connection && keep_alive_enabled && !g_shutdown_requested);
         
     } catch (const std::exception& e) {
-        std::ostringstream oss;
-        oss << "[Thread " << thread_id << "] Exception: " << e.what();
-        safe_cout(oss.str());
+        if (!g_shutdown_requested) {
+            std::ostringstream oss;
+            oss << "[Thread " << thread_id << "] Exception: " << e.what();
+            safe_cout(oss.str());
+        }
     }
     
     // Clean up connection
     remove_connection(client_socket);
     close(client_socket);
-    
-    std::ostringstream oss;
-    oss << "[Thread " << thread_id << "] Connection closed";
-    safe_cout(oss.str());
 }
+
+void WebServer::handle_client_task_safe(int client_socket) {
+    // RAII wrapper for socket cleanup
+    struct SocketGuard {
+        int socket;
+        WebServer* server;
+        
+        SocketGuard(int s, WebServer* srv) : socket(s), server(srv) {}
+        ~SocketGuard() {
+            server->remove_connection_safe(socket);
+            g_resource_manager.unregister_socket(socket);
+            close(socket);
+        }
+    } guard(client_socket, this);
+    
+    auto& coordinator = ShutdownCoordinator::instance();
+    bool keep_connection = false;
+    
+    try {
+        do {
+            if (coordinator.is_shutdown_requested()) {
+                break;
+            }
+            
+            auto start_time = std::chrono::high_resolution_clock::now();
+            
+            // Read and parse HTTP request with timeout
+            std::string headers_data;
+            if (!read_request_with_timeout(client_socket, headers_data, std::chrono::seconds(5))) {
+                break; // Timeout or error
+            }
+            
+            if (coordinator.is_shutdown_requested()) {
+                break;
+            }
+
+            HttpRequest request;
+            if (!request.parse(headers_data)) {
+                if (!coordinator.is_shutdown_requested()) {
+                    std::string response = get_400_response();
+                    send_response_safe(client_socket, response);
+                }
+                break;
+            }
+
+            // Check for WebSocket upgrade
+            if (is_websocket_path(request.path) && 
+                websocket_handler->is_websocket_request(request.headers) &&
+                !coordinator.is_shutdown_requested()) {
+                
+                if (handle_websocket_upgrade(client_socket, request)) {
+                    return; // WebSocket handler takes over
+                } else {
+                    break;
+                }
+            }
+
+            if (coordinator.is_shutdown_requested()) {
+                break;
+            }
+
+            // Handle regular HTTP request
+            std::string response = handle_request(request, keep_connection);
+            if (!coordinator.is_shutdown_requested()) {
+                send_response_safe(client_socket, response);
+            }
+            
+            if (keep_connection && keep_alive_enabled && !coordinator.is_shutdown_requested()) {
+                update_connection_timestamp_safe(client_socket);
+            }
+
+            auto end_time = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+            
+            int status_code = extract_status_code(response);
+            
+            if (!coordinator.is_shutdown_requested()) {
+                log_request(request.method, request.path, status_code, duration);
+                record_request_metric(request.method, request.path, status_code, duration.count());
+                total_requests++;
+            }
+
+        } while (keep_connection && keep_alive_enabled && !coordinator.is_shutdown_requested());
+        
+    } catch (const std::exception& e) {
+        if (!coordinator.is_shutdown_requested()) {
+            std::cerr << "Client handler exception: " << e.what() << std::endl;
+        }
+    }
+}
+
+int WebServer::extract_status_code(const std::string& response) const {
+    if (response.find("200 OK") != std::string::npos) return 200;
+    if (response.find("201 Created") != std::string::npos) return 201;
+    if (response.find("400 Bad Request") != std::string::npos) return 400;
+    if (response.find("404 Not Found") != std::string::npos) return 404;
+    if (response.find("405 Method Not Allowed") != std::string::npos) return 405;
+    if (response.find("500 Internal Server Error") != std::string::npos) return 500;
+    return 200; // Default
+}
+
+bool WebServer::read_request_with_timeout(int socket, std::string& headers_data, std::chrono::seconds timeout) {
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    char buffer[4096];
+    
+    while (headers_data.find("\r\n\r\n") == std::string::npos) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            return false; // Timeout
+        }
+        
+        if (ShutdownCoordinator::instance().is_shutdown_requested()) {
+            return false;
+        }
+        
+        // Use select for timeout
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(socket, &read_fds);
+        
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        
+        int select_result = select(socket + 1, &read_fds, nullptr, nullptr, &tv);
+        
+        if (select_result < 0) {
+            return false; // Error
+        }
+        
+        if (select_result == 0) {
+            continue; // Timeout, check deadline and continue
+        }
+        
+        ssize_t bytes_received = recv(socket, buffer, sizeof(buffer) - 1, 0);
+        
+        if (bytes_received > 0) {
+            buffer[bytes_received] = '\0';
+            headers_data += std::string(buffer);
+            
+            if (headers_data.size() > 8192) {
+                return false; // Prevent abuse
+            }
+        } else if (bytes_received == 0) {
+            return false; // Connection closed
+        } else {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                return false; // Error
+            }
+        }
+    }
+    
+    return true;
+}
+
+bool WebServer::send_response_safe(int socket, const std::string& response) {
+    if (ShutdownCoordinator::instance().is_shutdown_requested()) {
+        return false;
+    }
+    
+    size_t total_sent = 0;
+    size_t response_len = response.length();
+    
+    while (total_sent < response_len) {
+        if (ShutdownCoordinator::instance().is_shutdown_requested()) {
+            return false;
+        }
+        
+        ssize_t bytes_sent = send(socket, response.c_str() + total_sent, 
+                                response_len - total_sent, MSG_NOSIGNAL);
+        
+        if (bytes_sent < 0) {
+            if (errno == EPIPE || errno == ECONNRESET) {
+                return false; // Client disconnected
+            }
+            return false;
+        }
+        
+        total_sent += bytes_sent;
+    }
+    
+    return true;
+}
+
+void WebServer::add_connection_safe(int socket) {
+    // Critical operation: must succeed to prevent resource leaks
+    std::lock_guard<std::timed_mutex> lock(connection_mutex);
+    connection_timestamps[socket] = std::chrono::steady_clock::now();
+}
+
+void WebServer::update_connection_timestamp_safe(int socket) {
+    // Critical operation: must succeed to maintain accurate timeouts
+    std::lock_guard<std::timed_mutex> lock(connection_mutex);
+    auto it = connection_timestamps.find(socket);
+    if (it != connection_timestamps.end()) {
+        it->second = std::chrono::steady_clock::now();
+    }
+}
+
+void WebServer::remove_connection_safe(int socket) {
+    // Critical operation: must succeed to prevent memory leaks
+    std::lock_guard<std::timed_mutex> lock(connection_mutex);
+    connection_timestamps.erase(socket);
+}
+
 
 std::string WebServer::handle_request(const HttpRequest& request, bool& keep_alive) {
     keep_alive = should_keep_alive(request);
@@ -270,12 +564,17 @@ std::string WebServer::handle_request(const HttpRequest& request, bool& keep_ali
 }
 
 std::string WebServer::handle_get_request(const HttpRequest& request, bool& keep_alive) {
+    // Check for dashboard request
+    if (request.path == "/dashboard" || request.path == "/dashboard.html") {
+        return handle_dashboard_request(request);
+    }
+    
     // Check if it's an API request
     if (is_api_path(request.path)) {
         return handle_api_request(request, keep_alive);
     }
     
-    // Regular static file serving
+    // Regular static file serving (existing code)
     if (!file_handler->file_exists(request.path)) {
         keep_alive = false;
         return get_404_response();
@@ -287,10 +586,9 @@ std::string WebServer::handle_get_request(const HttpRequest& request, bool& keep
         return get_404_response();
     }
     
-    // Fix for MIME type detection: when path is "/", treat it as "index.html"
     std::string mime_path = request.path;
     if (request.path == "/") {
-        mime_path = "index.html";  // This will give us text/html instead of octet-stream
+        mime_path = "index.html";
     }
     
     std::string mime_type = file_handler->get_mime_type(mime_path);
@@ -342,7 +640,7 @@ std::string WebServer::handle_api_request(const HttpRequest& request, bool& keep
 std::string WebServer::handle_users_api(const HttpRequest& request) {
     if (request.method == "GET") {
         // GET /api/users - List all users
-        std::lock_guard<std::mutex> lock(data_mutex);
+        std::lock_guard<std::timed_mutex> lock(data_mutex);
         std::string json_response = JsonHandler::build_users_list_response(users_data);
         return build_http_response(200, "OK", "application/json", json_response, true, true);
         
@@ -390,7 +688,7 @@ std::string WebServer::handle_users_api(const HttpRequest& request) {
 std::string WebServer::handle_user_api(const HttpRequest& request, const std::string& user_id) {
     if (request.method == "GET") {
         // GET /api/users/{id} - Get specific user
-        std::lock_guard<std::mutex> lock(data_mutex);
+        std::lock_guard<std::timed_mutex> lock(data_mutex);
         
         for (const auto& user : users_data) {
             if (user.at("id") == user_id) {
@@ -429,6 +727,8 @@ std::string WebServer::handle_server_stats_api(const HttpRequest& request) {
 }
 
 std::string WebServer::handle_api_docs(const HttpRequest& request) {
+    (void)request; // Suppress unused parameter warning
+    
     std::string docs_html = R"(
 <!DOCTYPE html>
 <html>
@@ -452,74 +752,25 @@ std::string WebServer::handle_api_docs(const HttpRequest& request) {
     <div class="endpoint">
         <span class="method get">GET</span> <span class="url">/api/stats</span>
         <p>Get real-time server performance statistics</p>
-        <pre>Response: {
-  "success": true,
-  "message": "Server statistics",
-  "data": {
-    "total_requests": 1234,
-    "active_connections": 5,
-    "thread_count": 4,
-    "queue_size": 0
-  }
-}</pre>
     </div>
 
     <h2>👥 User Management</h2>
     <div class="endpoint">
         <span class="method get">GET</span> <span class="url">/api/users</span>
         <p>Get all users</p>
-        <pre>Response: {
-  "success": true,
-  "message": "Users list retrieved",
-  "data": [
-    {"id": "1", "name": "John Doe", "email": "john@example.com"},
-    {"id": "2", "name": "Jane Smith", "email": "jane@example.com"}
-  ]
-}</pre>
     </div>
 
     <div class="endpoint">
         <span class="method post">POST</span> <span class="url">/api/users</span>
         <p>Create a new user</p>
-        <pre>Request: {
-  "name": "New User",
-  "email": "user@example.com"
-}
-
-Response: {
-  "success": true,
-  "message": "User created successfully",
-  "data": {
-    "id": 3,
-    "name": "New User",
-    "email": "user@example.com"
-  }
-}</pre>
     </div>
 
     <div class="endpoint">
         <span class="method get">GET</span> <span class="url">/api/users/{id}</span>
         <p>Get a specific user by ID</p>
-        <pre>Response: {
-  "success": true,
-  "message": "User data retrieved",
-  "data": {
-    "id": 1,
-    "name": "John Doe",
-    "email": "john@example.com"
-  }
-}</pre>
     </div>
 
-    <h2>🧪 Test the API</h2>
-    <p>You can test these endpoints using:</p>
-    <ul>
-        <li><strong>Browser:</strong> Visit the GET endpoints directly</li>
-        <li><strong>curl:</strong> <code>curl -X POST http://localhost:)" + std::to_string(port) + R"(/api/users -H "Content-Type: application/json" -d '{"name":"Test User","email":"test@example.com"}'</code></li>
-        <li><strong>Postman:</strong> Import the endpoints and test with a UI</li>
-    </ul>
-
-    <p><a href="/">← Back to Home</a> | <a href="/api/stats">View Live Stats</a></p>
+    <p><a href="/">← Back to Home</a> | <a href="/dashboard">📊 Dashboard</a></p>
 </body>
 </html>
 )";
@@ -528,6 +779,8 @@ Response: {
 }
 
 std::string WebServer::handle_options_request(const HttpRequest& request) {
+    (void)request; // Suppress unused parameter warning
+    
     // CORS preflight request
     std::string response = build_http_response(200, "OK", "text/plain", "", false, true);
     
@@ -643,46 +896,66 @@ bool WebServer::should_keep_alive(const HttpRequest& request) const {
 }
 
 void WebServer::add_connection(int socket) {
-    std::lock_guard<std::mutex> lock(connection_mutex);
-    connection_timestamps[socket] = std::chrono::steady_clock::now();
+    if (g_shutdown_requested) return;
+    
+    std::unique_lock<std::timed_mutex> lock(connection_mutex, std::try_to_lock);
+    if (lock.owns_lock()) {
+        connection_timestamps[socket] = std::chrono::steady_clock::now();
+    }
 }
 
 void WebServer::update_connection_timestamp(int socket) {
-    std::lock_guard<std::mutex> lock(connection_mutex);
-    auto it = connection_timestamps.find(socket);
-    if (it != connection_timestamps.end()) {
-        it->second = std::chrono::steady_clock::now();
+    if (g_shutdown_requested) return;
+    
+    std::unique_lock<std::timed_mutex> lock(connection_mutex, std::try_to_lock);
+    if (lock.owns_lock()) {
+        auto it = connection_timestamps.find(socket);
+        if (it != connection_timestamps.end()) {
+            it->second = std::chrono::steady_clock::now();
+        }
     }
 }
 
 void WebServer::remove_connection(int socket) {
-    std::lock_guard<std::mutex> lock(connection_mutex);
-    connection_timestamps.erase(socket);
+    std::unique_lock<std::timed_mutex> lock(connection_mutex, std::try_to_lock);
+    if (lock.owns_lock()) {
+        connection_timestamps.erase(socket);
+    }
 }
 
 void WebServer::manage_connections() {
-    if (!keep_alive_enabled) return;
+    if (!keep_alive_enabled || ShutdownCoordinator::instance().is_shutdown_requested()) {
+        return;
+    }
     
     std::vector<int> expired_connections;
     auto now = std::chrono::steady_clock::now();
     
-    {
-        std::lock_guard<std::mutex> lock(connection_mutex);
-        for (const auto& conn : connection_timestamps) {
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - conn.second) > connection_timeout) {
-                expired_connections.push_back(conn.first);
-            }
-        }
-        
-        // Remove expired connections from tracking
-        for (int socket : expired_connections) {
-            connection_timestamps.erase(socket);
+    // Try to get lock with timeout
+    std::unique_lock<std::timed_mutex> lock(connection_mutex, std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::milliseconds(500))) {
+        return; // Skip this cycle if we can't get the lock
+    }
+    
+    // Find expired connections
+    for (const auto& conn : connection_timestamps) {
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - conn.second) > connection_timeout) {
+            expired_connections.push_back(conn.first);
         }
     }
     
-    // Close expired connections
+    // Remove from map
     for (int socket : expired_connections) {
+        connection_timestamps.erase(socket);
+    }
+    
+    lock.unlock();
+    
+    // Close sockets outside of lock
+    for (int socket : expired_connections) {
+        shutdown(socket, SHUT_RDWR);
         close(socket);
+        g_resource_manager.unregister_socket(socket);
         safe_cout("Closed idle connection: " + std::to_string(socket));
     }
 }
@@ -707,30 +980,60 @@ void WebServer::log_request(const std::string& method, const std::string& path, 
 }
 
 void WebServer::safe_cout(const std::string& message) const {
-    std::lock_guard<std::mutex> lock(log_mutex);
-    std::cout << message << std::endl;
+    std::unique_lock<std::timed_mutex> lock(log_mutex, std::defer_lock);
+    
+    if (lock.try_lock_for(std::chrono::milliseconds(50))) {
+        std::cout << message << std::endl;
+    }
+    // If we can't get the log mutex, just skip - logging is not critical during shutdown
 }
 
 void WebServer::cleanup() {
-    keep_alive_enabled.store(false);
+    auto& coordinator = ShutdownCoordinator::instance();
+    coordinator.request_shutdown();
     
+    safe_cout("Initiating server cleanup...");
+    
+    // Stop accepting new connections
     if (server_fd != -1) {
+        shutdown(server_fd, SHUT_RDWR);
         close(server_fd);
         server_fd = -1;
     }
     
-    // Close all active connections
-    std::lock_guard<std::mutex> lock(connection_mutex);
-    for (const auto& conn : connection_timestamps) {
-        close(conn.first);
+    // Stop metrics collection
+    stop_metrics_collection();
+    
+    // Stop WebSocket handler
+    if (websocket_handler) {
+        websocket_handler->stop();
     }
-    connection_timestamps.clear();
+    
+    // Stop thread pool
+    if (thread_pool) {
+        thread_pool->stop();
+    }
+    
+    // Force close all remaining sockets
+    g_resource_manager.close_all_sockets();
+    
+    // Clear connection tracking with forced access
+    {
+        std::lock_guard<std::timed_mutex> lock(connection_mutex);
+        connection_timestamps.clear();
+    }
+    
+    // Wait for all threads to finish
+    if (!coordinator.wait_for_all_threads(std::chrono::seconds(3))) {
+        safe_cout("Forcing shutdown of remaining threads...");
+        coordinator.force_shutdown_threads();
+    }
     
     safe_cout("Server cleanup completed");
 }
 
 void WebServer::initialize_sample_data() {
-    std::lock_guard<std::mutex> lock(data_mutex);
+    std::lock_guard<std::timed_mutex> lock(data_mutex);
     
     // Add some sample users
     users_data.push_back({
@@ -755,7 +1058,7 @@ void WebServer::initialize_sample_data() {
 }
 
 std::map<std::string, std::string> WebServer::create_user(const std::string& name, const std::string& email) {
-    std::lock_guard<std::mutex> lock(data_mutex);
+    std::lock_guard<std::timed_mutex> lock(data_mutex);
     
     std::map<std::string, std::string> new_user;
     new_user["id"] = std::to_string(next_user_id.load());
@@ -784,4 +1087,160 @@ std::vector<std::string> WebServer::split_path(const std::string& path) const {
 
 bool WebServer::is_api_path(const std::string& path) const {
     return path.length() >= 4 && path.substr(0, 4) == "/api";
+}
+
+// WebSocket upgrade handler:
+bool WebServer::handle_websocket_upgrade(int client_socket, const HttpRequest& request) {
+    if (g_shutdown_requested) {
+        return false;
+    }
+    
+    std::string response = websocket_handler->generate_websocket_response(request.headers);
+    
+    if (response.empty()) {
+        return false;
+    }
+    
+    // Send WebSocket upgrade response
+    if (send(client_socket, response.c_str(), response.length(), MSG_NOSIGNAL) < 0) {
+        return false;
+    }
+    
+    // Generate unique client ID
+    std::string client_id = generate_client_id();
+    
+    // Handle WebSocket connection (this will block until connection closes)
+    return websocket_handler->handle_websocket_connection(client_socket, client_id);
+}
+
+// Dashboard request handler:
+std::string WebServer::handle_dashboard_request(const HttpRequest& request) {
+    (void)request; // Suppress unused parameter warning
+    
+    // Serve the performance dashboard HTML file
+    if (file_handler->file_exists("/dashboard.html")) {
+        std::string content = file_handler->read_file("/dashboard.html");
+        return build_http_response(200, "OK", "text/html", content, false, true);
+    } else {
+        // Return basic dashboard if file doesn't exist
+        std::string basic_dashboard = R"(
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Performance Dashboard</title>
+    <style>body { font-family: Arial, sans-serif; margin: 40px; }</style>
+</head>
+<body>
+    <h1>🚀 Performance Dashboard</h1>
+    <p>Dashboard HTML file not found. Please ensure dashboard.html is in your www directory.</p>
+    <p><a href="/">← Back to Home</a> | <a href="/api/docs">📚 API Docs</a></p>
+</body>
+</html>
+)";
+        return build_http_response(200, "OK", "text/html", basic_dashboard, false, true);
+    }
+}
+
+// Utility functions:
+std::string WebServer::generate_client_id() const {
+    static std::atomic<int> counter{0};
+    auto now = std::chrono::high_resolution_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
+    
+    std::ostringstream oss;
+    oss << "client_" << timestamp << "_" << counter++;
+    return oss.str();
+}
+
+bool WebServer::is_websocket_path(const std::string& path) const {
+    return path == "/ws" || path == "/websocket";
+}
+
+size_t WebServer::get_active_connections() const {
+    size_t count = 0;
+    
+    std::unique_lock<std::timed_mutex> lock(connection_mutex, std::try_to_lock);
+    if (lock.owns_lock()) {
+        count = connection_timestamps.size();
+    }
+    
+    if (websocket_handler) {
+        count += websocket_handler->get_connection_count();
+    }
+    
+    return count;
+}
+
+// Performance metrics functions:
+void WebServer::start_metrics_collection() {
+    if (metrics_running.exchange(true)) {
+        return; // Already running
+    }
+    
+    metrics_thread = std::thread([this]() {
+        while (metrics_running && !g_shutdown_requested) {
+            try {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                
+                if (g_shutdown_requested) break;
+                
+                // Collect system metrics
+                size_t active_conn = get_active_connections();
+                size_t queue_size = thread_pool->get_queue_size();
+                size_t thread_count = thread_pool->get_thread_count();
+                
+                if (performance_metrics && !g_shutdown_requested) {
+                    performance_metrics->record_system_metrics(
+                        0,              // memory will be auto-detected
+                        -1.0,           // cpu will be auto-calculated
+                        active_conn,
+                        queue_size,
+                        thread_count
+                    );
+                }
+            } catch (const std::exception& e) {
+                if (!g_shutdown_requested) {
+                    std::cerr << "Metrics collection error: " << e.what() << std::endl;
+                }
+                break;
+            }
+        }
+    });
+}
+
+void WebServer::stop_metrics_collection() {
+    metrics_running = false;
+    
+    if (metrics_thread.joinable()) {
+        // Give the thread a moment to exit gracefully
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        metrics_thread.join();
+    }
+}
+
+void WebServer::metrics_collection_loop() {
+    while (metrics_running) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        
+        // Collect system metrics
+        size_t active_conn = get_active_connections();
+        size_t queue_size = thread_pool->get_queue_size();
+        size_t thread_count = thread_pool->get_thread_count();
+        
+        performance_metrics->record_system_metrics(
+            0,              // memory will be auto-detected
+            -1.0,           // cpu will be auto-calculated
+            active_conn,
+            queue_size,
+            thread_count
+        );
+    }
+}
+
+void WebServer::record_request_metric(const std::string& method, const std::string& path, 
+                                     int status_code, double response_time_ms) {
+    if (performance_metrics && !g_shutdown_requested) {
+        performance_metrics->record_request(method, path, status_code, response_time_ms);
+    }
 }
