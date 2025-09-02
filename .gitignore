@@ -11,6 +11,10 @@
 *.a
 *.lib
 
+# Certificates
+cert.pem
+key.pem
+
 # Executables
 *.exe
 *.out

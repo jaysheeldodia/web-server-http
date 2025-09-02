@@ -185,6 +185,9 @@ int HTTP2Handler::on_frame_recv_callback(nghttp2_session *session,
         case NGHTTP2_GOAWAY:
             std::cout << "Received GOAWAY frame" << std::endl;
             return NGHTTP2_ERR_CALLBACK_FAILURE; // Signal to close connection
+        case NGHTTP2_PRIORITY:
+            handler->handle_priority_frame(frame);
+            break;
         default:
             // Handle other frame types gracefully
             break;
@@ -334,6 +337,17 @@ void HTTP2Handler::process_request(HTTP2Stream* stream) {
                 stream->response_body = file_handler->read_file(file_path);
                 stream->status_code = 200;
                 stream->response_headers["content-type"] = file_handler->get_mime_type(file_path);
+                
+                // Server push logic for HTML pages
+                if (stream->push_enabled && server_push_enabled() && 
+                    (stream->response_headers["content-type"] == "text/html")) {
+                    std::vector<std::string> push_resources;
+                    identify_push_resources(stream->path, push_resources);
+                    
+                    for (const auto& resource : push_resources) {
+                        push_resource(stream->stream_id, resource, "GET");
+                    }
+                }
             } else {
                 stream->status_code = 404;
                 stream->response_body = "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>";
@@ -445,4 +459,151 @@ std::string HTTP2Handler::get_content_type(const std::string& path) {
         if (ext == "txt") return "text/plain";
     }
     return "application/octet-stream";
+}
+
+// Server Push Implementation
+bool HTTP2Handler::server_push_enabled() const {
+    return true; // Default enabled, can be controlled by settings
+}
+
+void HTTP2Handler::enable_server_push(bool enable) {
+    nghttp2_settings_entry setting = {NGHTTP2_SETTINGS_ENABLE_PUSH, enable ? 1u : 0u};
+    int rv = nghttp2_submit_settings(session, NGHTTP2_FLAG_NONE, &setting, 1);
+    if (rv != 0) {
+        std::cerr << "Failed to submit push setting: " << nghttp2_strerror(rv) << std::endl;
+    }
+}
+
+bool HTTP2Handler::push_resource(int32_t parent_stream_id, const std::string& path, const std::string& method) {
+    if (!server_push_enabled()) {
+        return false;
+    }
+    
+    // Create push promise headers
+    std::vector<nghttp2_nv> push_headers;
+    std::vector<std::string> header_storage;
+    
+    // :method
+    header_storage.push_back(":method");
+    header_storage.push_back(method);
+    nghttp2_nv method_header;
+    method_header.name = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-2].c_str()));
+    method_header.value = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-1].c_str()));
+    method_header.namelen = header_storage[header_storage.size()-2].length();
+    method_header.valuelen = header_storage[header_storage.size()-1].length();
+    method_header.flags = NGHTTP2_NV_FLAG_NONE;
+    push_headers.push_back(method_header);
+    
+    // :path
+    header_storage.push_back(":path");
+    header_storage.push_back(path);
+    nghttp2_nv path_header;
+    path_header.name = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-2].c_str()));
+    path_header.value = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-1].c_str()));
+    path_header.namelen = header_storage[header_storage.size()-2].length();
+    path_header.valuelen = header_storage[header_storage.size()-1].length();
+    path_header.flags = NGHTTP2_NV_FLAG_NONE;
+    push_headers.push_back(path_header);
+    
+    // :scheme
+    header_storage.push_back(":scheme");
+    header_storage.push_back("http");
+    nghttp2_nv scheme_header;
+    scheme_header.name = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-2].c_str()));
+    scheme_header.value = reinterpret_cast<uint8_t*>(const_cast<char*>(header_storage[header_storage.size()-1].c_str()));
+    scheme_header.namelen = header_storage[header_storage.size()-2].length();
+    scheme_header.valuelen = header_storage[header_storage.size()-1].length();
+    scheme_header.flags = NGHTTP2_NV_FLAG_NONE;
+    push_headers.push_back(scheme_header);
+    
+    // Submit push promise
+    int32_t promised_stream_id = nghttp2_submit_push_promise(session, NGHTTP2_FLAG_NONE, parent_stream_id,
+                                                            push_headers.data(), push_headers.size(), nullptr);
+    
+    if (promised_stream_id < 0) {
+        std::cerr << "Failed to submit push promise: " << nghttp2_strerror(promised_stream_id) << std::endl;
+        return false;
+    }
+    
+    std::cout << "Push promise submitted for " << path << " on stream " << promised_stream_id << std::endl;
+    
+    // Create stream for the pushed resource
+    auto pushed_stream = std::make_unique<HTTP2Stream>(promised_stream_id);
+    pushed_stream->method = method;
+    pushed_stream->path = path;
+    pushed_stream->headers_complete = true;
+    pushed_stream->request_complete = true;
+    streams[promised_stream_id] = std::move(pushed_stream);
+    
+    // Process the pushed resource
+    process_request(streams[promised_stream_id].get());
+    
+    return true;
+}
+
+void HTTP2Handler::identify_push_resources(const std::string& path, std::vector<std::string>& resources) {
+    // Basic push resource identification for HTML pages
+    if (path == "/" || path == "/index.html") {
+        resources.push_back("/style.css");
+        resources.push_back("/demo.html");
+    } else if (path == "/dashboard.html") {
+        resources.push_back("/style.css");
+        resources.push_back("/data.json");
+    } else if (path == "/demo.html") {
+        resources.push_back("/style.css");
+    }
+    // Add more sophisticated resource identification as needed
+}
+
+bool HTTP2Handler::send_push_promise(int32_t parent_stream_id, const std::string& path) {
+    return push_resource(parent_stream_id, path, "GET");
+}
+
+// Priority Handling Implementation
+void HTTP2Handler::set_stream_priority(int32_t stream_id, int32_t dependency, int weight, bool exclusive) {
+    StreamPriority priority(stream_id, dependency, weight, exclusive);
+    stream_priorities[stream_id] = priority;
+    
+    nghttp2_priority_spec priority_spec;
+    nghttp2_priority_spec_init(&priority_spec, dependency, weight, exclusive ? 1 : 0);
+    
+    int rv = nghttp2_submit_priority(session, NGHTTP2_FLAG_NONE, stream_id, &priority_spec);
+    if (rv != 0) {
+        std::cerr << "Failed to submit priority: " << nghttp2_strerror(rv) << std::endl;
+    }
+}
+
+void HTTP2Handler::update_stream_priority(int32_t stream_id, int32_t dependency, int weight, bool exclusive) {
+    auto it = stream_priorities.find(stream_id);
+    if (it != stream_priorities.end()) {
+        it->second.dependency = dependency;
+        it->second.weight = weight;
+        it->second.exclusive = exclusive;
+    } else {
+        set_stream_priority(stream_id, dependency, weight, exclusive);
+    }
+}
+
+HTTP2Handler::StreamPriority HTTP2Handler::get_stream_priority(int32_t stream_id) const {
+    auto it = stream_priorities.find(stream_id);
+    if (it != stream_priorities.end()) {
+        return it->second;
+    }
+    return StreamPriority(); // Default priority
+}
+
+void HTTP2Handler::handle_priority_frame(const nghttp2_frame* frame) {
+    const nghttp2_priority_spec& priority_spec = frame->priority.pri_spec;
+    
+    StreamPriority priority(frame->hd.stream_id, 
+                          priority_spec.stream_id,
+                          priority_spec.weight,
+                          priority_spec.exclusive != 0);
+    
+    stream_priorities[frame->hd.stream_id] = priority;
+    
+    std::cout << "Updated priority for stream " << frame->hd.stream_id 
+              << " dependency: " << priority_spec.stream_id
+              << " weight: " << priority_spec.weight
+              << " exclusive: " << (priority_spec.exclusive ? "true" : "false") << std::endl;
 }

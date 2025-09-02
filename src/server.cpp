@@ -54,7 +54,7 @@ static ResourceManager g_resource_manager;
 WebServer::WebServer(int port, const std::string& doc_root, size_t thread_count) 
     : server_fd(-1), port(port), document_root(doc_root), 
       keep_alive_enabled(false), connection_timeout(5), total_requests(0), next_user_id(1),
-      metrics_running(false), http2_enabled(false) {
+      metrics_running(false), http2_enabled(false), tls_enabled(false), ssl_ctx(nullptr) {
     
     memset(&address, 0, sizeof(address));
     file_handler = std::make_unique<FileHandler>(document_root);
@@ -383,6 +383,38 @@ void WebServer::handle_client_task_safe(int client_socket) {
         }
     } guard(client_socket, this);
     
+    auto& coordinator = ShutdownCoordinator::instance();
+    
+    try {
+        if (coordinator.is_shutdown_requested()) {
+            return;
+        }
+        
+        // If TLS is enabled, detect if this is a TLS connection
+        if (tls_enabled.load()) {
+            // Peek at the first byte to detect TLS handshake
+            char peek_buffer[1];
+            ssize_t peek_result = recv(client_socket, peek_buffer, 1, MSG_PEEK);
+            
+            if (peek_result > 0) {
+                // TLS handshake starts with 0x16 (SSL3_RT_HANDSHAKE)
+                if ((unsigned char)peek_buffer[0] == 0x16) {
+                    safe_cout("Detected TLS connection, handling with SSL");
+                    handle_tls_connection(client_socket);
+                    return;
+                }
+            }
+        }
+        
+        // Handle as regular HTTP connection
+        handle_http_connection(client_socket);
+        
+    } catch (const std::exception& e) {
+        safe_cout("Client handling error: " + std::string(e.what()));
+    }
+}
+
+void WebServer::handle_http_connection(int client_socket) {
     auto& coordinator = ShutdownCoordinator::instance();
     bool keep_connection = false;
     
@@ -1060,6 +1092,9 @@ void WebServer::cleanup() {
         thread_pool->stop();
     }
     
+    // Cleanup TLS/SSL context
+    cleanup_ssl_context();
+    
     // Force close all remaining sockets
     g_resource_manager.close_all_sockets();
     
@@ -1393,4 +1428,195 @@ bool WebServer::send_http2_upgrade_response(int client_socket) {
     
     ssize_t sent = send(client_socket, upgrade_response.c_str(), upgrade_response.length(), 0);
     return sent == static_cast<ssize_t>(upgrade_response.length());
+}
+
+// TLS/ALPN Implementation
+void WebServer::enable_tls(bool enable, const std::string& cert_file, const std::string& key_file) {
+    tls_enabled.store(enable);
+    if (enable) {
+        this->cert_file = cert_file;
+        this->key_file = key_file;
+        if (!initialize_ssl_context()) {
+            safe_cout("Failed to initialize SSL context");
+            tls_enabled.store(false);
+        }
+    } else {
+        cleanup_ssl_context();
+    }
+}
+
+bool WebServer::initialize_ssl_context() {
+    // Initialize OpenSSL
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
+    
+    // Create SSL context
+    ssl_ctx = SSL_CTX_new(TLS_server_method());
+    if (!ssl_ctx) {
+        safe_cout("Failed to create SSL context");
+        return false;
+    }
+    
+    // Set certificate and key files (if provided)
+    if (!cert_file.empty() && !key_file.empty()) {
+        if (SSL_CTX_use_certificate_file(ssl_ctx, cert_file.c_str(), SSL_FILETYPE_PEM) <= 0) {
+            safe_cout("Failed to load certificate file: " + cert_file);
+            cleanup_ssl_context();
+            return false;
+        }
+        
+        if (SSL_CTX_use_PrivateKey_file(ssl_ctx, key_file.c_str(), SSL_FILETYPE_PEM) <= 0) {
+            safe_cout("Failed to load private key file: " + key_file);
+            cleanup_ssl_context();
+            return false;
+        }
+        
+        if (!SSL_CTX_check_private_key(ssl_ctx)) {
+            safe_cout("Private key does not match certificate");
+            cleanup_ssl_context();
+            return false;
+        }
+    }
+    
+    // Set ALPN callback for protocol negotiation
+    SSL_CTX_set_alpn_select_cb(ssl_ctx, alpn_select_callback, this);
+    
+    // Set supported protocols (HTTP/2 and HTTP/1.1)
+    const unsigned char protocols[] = {
+        2, 'h', '2',           // HTTP/2
+        8, 'h', 't', 't', 'p', '/', '1', '.', '1'  // HTTP/1.1
+    };
+    
+    if (SSL_CTX_set_alpn_protos(ssl_ctx, protocols, sizeof(protocols)) != 0) {
+        safe_cout("Failed to set ALPN protocols");
+        cleanup_ssl_context();
+        return false;
+    }
+    
+    safe_cout("SSL context initialized with ALPN support");
+    return true;
+}
+
+void WebServer::cleanup_ssl_context() {
+    if (ssl_ctx) {
+        SSL_CTX_free(ssl_ctx);
+        ssl_ctx = nullptr;
+    }
+    EVP_cleanup();
+}
+
+SSL* WebServer::create_ssl_connection(int client_socket) {
+    if (!ssl_ctx) {
+        return nullptr;
+    }
+    
+    SSL* ssl = SSL_new(ssl_ctx);
+    if (!ssl) {
+        safe_cout("Failed to create SSL connection");
+        return nullptr;
+    }
+    
+    if (SSL_set_fd(ssl, client_socket) != 1) {
+        safe_cout("Failed to set SSL file descriptor");
+        SSL_free(ssl);
+        return nullptr;
+    }
+    
+    return ssl;
+}
+
+bool WebServer::perform_alpn_negotiation(SSL* ssl, std::string& selected_protocol) {
+    if (SSL_accept(ssl) <= 0) {
+        safe_cout("SSL handshake failed");
+        return false;
+    }
+    
+    const unsigned char* alpn_selected;
+    unsigned int alpn_len;
+    SSL_get0_alpn_selected(ssl, &alpn_selected, &alpn_len);
+    
+    if (alpn_selected && alpn_len > 0) {
+        selected_protocol = std::string(reinterpret_cast<const char*>(alpn_selected), alpn_len);
+        safe_cout("ALPN negotiated protocol: " + selected_protocol);
+        return true;
+    }
+    
+    // Default to HTTP/1.1 if no ALPN negotiation
+    selected_protocol = "http/1.1";
+    safe_cout("No ALPN negotiation, defaulting to HTTP/1.1");
+    return true;
+}
+
+void WebServer::handle_tls_connection(int client_socket) {
+    SSL* ssl = create_ssl_connection(client_socket);
+    if (!ssl) {
+        safe_cout("Failed to create SSL connection");
+        return;
+    }
+    
+    std::string selected_protocol;
+    if (!perform_alpn_negotiation(ssl, selected_protocol)) {
+        safe_cout("TLS handshake or ALPN negotiation failed");
+        SSL_free(ssl);
+        return;
+    }
+    
+    // Route to appropriate handler based on negotiated protocol
+    if (selected_protocol == "h2") {
+        safe_cout("Handling HTTP/2 over TLS connection");
+        // TODO: Implement HTTP/2 over TLS with SSL wrapper
+        // For now, inform client about the limitation
+        safe_cout("HTTP/2 over TLS not fully implemented yet");
+    } else {
+        safe_cout("Handling HTTP/1.1 over TLS connection");
+        // TODO: Implement HTTP/1.1 over TLS with SSL wrapper
+        // For now, inform client about the limitation  
+        safe_cout("HTTP/1.1 over TLS not fully implemented yet");
+    }
+    
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+}
+
+int WebServer::alpn_select_callback(SSL* ssl, const unsigned char** out, unsigned char* outlen,
+                                   const unsigned char* in, unsigned int inlen, void* arg) {
+    (void)ssl;
+    WebServer* server = static_cast<WebServer*>(arg);
+    
+    // Preferred protocols in order of preference
+    const unsigned char h2[] = {2, 'h', '2'};
+    const unsigned char http11[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+    
+    // Check for HTTP/2 first (if enabled)
+    if (server->is_http2_enabled()) {
+        for (unsigned int i = 0; i < inlen; ) {
+            unsigned char proto_len = in[i];
+            if (i + 1 + proto_len > inlen) break;
+            
+            if (proto_len == h2[0] && memcmp(&in[i], h2, sizeof(h2)) == 0) {
+                *out = &in[i + 1];
+                *outlen = proto_len;
+                return SSL_TLSEXT_ERR_OK;
+            }
+            
+            i += 1 + proto_len;
+        }
+    }
+    
+    // Fall back to HTTP/1.1
+    for (unsigned int i = 0; i < inlen; ) {
+        unsigned char proto_len = in[i];
+        if (i + 1 + proto_len > inlen) break;
+        
+        if (proto_len == http11[0] && memcmp(&in[i], http11, sizeof(http11)) == 0) {
+            *out = &in[i + 1];
+            *outlen = proto_len;
+            return SSL_TLSEXT_ERR_OK;
+        }
+        
+        i += 1 + proto_len;
+    }
+    
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
 }

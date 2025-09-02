@@ -24,8 +24,13 @@ struct HTTP2Stream {
     int status_code;
     size_t response_data_sent;
     
+    // Server push support
+    std::vector<std::string> push_resources;
+    bool push_enabled;
+    
     HTTP2Stream(int32_t id) : stream_id(id), headers_complete(false), 
-                             request_complete(false), status_code(200), response_data_sent(0) {}
+                             request_complete(false), status_code(200), response_data_sent(0),
+                             push_enabled(true) {}
 };
 
 class HTTP2Handler {
@@ -36,6 +41,20 @@ private:
     std::shared_ptr<FileHandler> file_handler;
     std::shared_ptr<PerformanceMetrics> performance_metrics;
     std::string document_root;
+    
+    // Stream priority support
+    struct StreamPriority {
+        int32_t stream_id;
+        int32_t dependency;
+        int weight;
+        bool exclusive;
+        
+        StreamPriority() : stream_id(0), dependency(0), weight(16), exclusive(false) {}
+        StreamPriority(int32_t id, int32_t dep, int w, bool excl) 
+            : stream_id(id), dependency(dep), weight(w), exclusive(excl) {}
+    };
+    
+    std::map<int32_t, StreamPriority> stream_priorities;
     
     // Buffer for outgoing data
     std::vector<uint8_t> output_buffer;
@@ -71,6 +90,20 @@ private:
     bool create_response_headers(HTTP2Stream* stream, std::vector<nghttp2_nv>& headers,
                                 std::vector<std::string>& header_storage);
     void send_window_update(int32_t stream_id, uint32_t window_size_increment);
+    
+    // Server push support
+    bool server_push_enabled() const;
+    void enable_server_push(bool enable);
+    bool push_resource(int32_t parent_stream_id, const std::string& path, 
+                      const std::string& method = "GET");
+    void identify_push_resources(const std::string& path, std::vector<std::string>& resources);
+    bool send_push_promise(int32_t parent_stream_id, const std::string& path);
+    
+    // Priority handling
+    void set_stream_priority(int32_t stream_id, int32_t dependency, int weight, bool exclusive);
+    void update_stream_priority(int32_t stream_id, int32_t dependency, int weight, bool exclusive);
+    StreamPriority get_stream_priority(int32_t stream_id) const;
+    void handle_priority_frame(const nghttp2_frame* frame);
     
 public:
     HTTP2Handler(int socket_fd, std::shared_ptr<FileHandler> file_handler,

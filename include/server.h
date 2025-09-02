@@ -13,6 +13,8 @@
 #include <memory>
 #include <vector>
 #include <map>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 #include "http_request.h"
 #include "file_handler.h"
 #include "thread_pool.h"
@@ -53,6 +55,12 @@ private:
     // HTTP/2 support
     std::atomic<bool> http2_enabled;
     
+    // TLS/ALPN support
+    std::atomic<bool> tls_enabled;
+    SSL_CTX* ssl_ctx;
+    std::string cert_file;
+    std::string key_file;
+    
 public:
     WebServer(int port = 8080, const std::string& doc_root = "./www", size_t thread_count = 4);
     ~WebServer();
@@ -79,6 +87,10 @@ public:
     void enable_http2(bool enable);
     bool is_http2_enabled() const { return http2_enabled.load(); }
     
+    // TLS/ALPN support
+    void enable_tls(bool enable, const std::string& cert_file = "", const std::string& key_file = "");
+    bool is_tls_enabled() const { return tls_enabled.load(); }
+    
     // Statistics
     size_t get_total_requests() const { return total_requests.load(); }
     size_t get_active_connections() const;
@@ -92,6 +104,18 @@ private:
     bool detect_http2_preface(int client_socket);
     void handle_http2_connection(int client_socket, const char* initial_data = nullptr, size_t initial_len = 0);
     bool send_http2_upgrade_response(int client_socket);
+    
+    // HTTP connection handling
+    void handle_http_connection(int client_socket);
+    
+    // TLS/ALPN handling
+    bool initialize_ssl_context();
+    void cleanup_ssl_context();
+    SSL* create_ssl_connection(int client_socket);
+    bool perform_alpn_negotiation(SSL* ssl, std::string& selected_protocol);
+    void handle_tls_connection(int client_socket);
+    static int alpn_select_callback(SSL* ssl, const unsigned char** out, unsigned char* outlen,
+                                   const unsigned char* in, unsigned int inlen, void* arg);
     
     // HTTP response builders
     std::string build_http_response(int status_code, const std::string& status_text, 
