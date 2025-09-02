@@ -1,5 +1,5 @@
-#include "../include/websocket_handler.h"
-#include "../include/shutdown_coordinator.h"
+#include "../../include/handlers/websocket_handler.h"
+#include "../../include/core/shutdown_coordinator.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>

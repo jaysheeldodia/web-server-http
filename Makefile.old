@@ -1,0 +1,101 @@
+# C++ Multithreaded HTTP WebServer with WebSocket Support
+# Updated Makefile - Fixed for C++14
+
+CXX = g++
+CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -pthread
+LDFLAGS = -pthread -lssl -lcrypto -lnghttp2
+
+# Directories
+SRCDIR = src
+INCDIR = include
+OBJDIR = obj
+WWWDIR = www
+
+# Source files
+SOURCES = $(wildcard $(SRCDIR)/*.cpp)
+OBJECTS = $(SOURCES:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+
+# Headers
+HEADERS = $(wildcard $(INCDIR)/*.h)
+
+# Executables
+TARGET = webserver
+LOAD_TESTER = load_tester
+SERVER_TESTER = server_tester
+DEBUG_TESTER = debug_test
+
+# Main target
+all: $(TARGET) $(LOAD_TESTER) $(SERVER_TESTER) $(DEBUG_TESTER)
+
+# Create object directory
+$(OBJDIR):
+	mkdir -p $(OBJDIR)
+
+# Build main server
+$(TARGET): $(OBJECTS) | $(OBJDIR)
+	$(CXX) $(OBJECTS) -o $@ $(LDFLAGS)
+
+# Build object files
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp $(HEADERS) | $(OBJDIR)
+	$(CXX) $(CXXFLAGS) -I$(INCDIR) -c $< -o $@
+
+# Build load tester
+$(LOAD_TESTER): load_test.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+
+# Build server tester
+$(SERVER_TESTER): server_test.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+
+# Build debug tester
+$(DEBUG_TESTER): debug_test.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+
+# Clean build files
+clean:
+	rm -rf $(OBJDIR)
+	rm -f $(TARGET) $(LOAD_TESTER) $(SERVER_TESTER) $(DEBUG_TESTER)
+
+# Clean everything including logs
+clean-all: clean
+	rm -f *.log
+	rm -f core core.*
+
+# Development targets
+debug: CXXFLAGS += -g -DDEBUG
+debug: $(TARGET)
+
+release: CXXFLAGS += -O3 -DNDEBUG
+release: $(TARGET)
+
+# Run targets
+run: $(TARGET)
+	./$(TARGET)
+
+run-debug: debug
+	./$(TARGET) -p 8080 -d ./www -t 8
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  all              - Build all executables"
+	@echo "  $(TARGET)        - Build main server"
+	@echo "  debug            - Build debug version"
+	@echo "  release          - Build optimized release version"
+	@echo "  clean            - Remove build files"
+	@echo "  clean-all        - Remove all generated files"
+	@echo "  run              - Run the server"
+	@echo "  run-debug        - Run server in debug mode"
+	@echo "  help             - Show this help"
+
+# Phony targets
+.PHONY: all clean clean-all debug release run run-debug help
+
+# Dependencies with the new globals.h
+$(OBJDIR)/main.o: $(SRCDIR)/main.cpp $(INCDIR)/server.h $(INCDIR)/globals.h
+$(OBJDIR)/server.o: $(SRCDIR)/server.cpp $(INCDIR)/server.h $(INCDIR)/globals.h $(INCDIR)/http_request.h $(INCDIR)/file_handler.h $(INCDIR)/thread_pool.h $(INCDIR)/json_handler.h $(INCDIR)/websocket_handler.h
+$(OBJDIR)/http_request.o: $(SRCDIR)/http_request.cpp $(INCDIR)/http_request.h
+$(OBJDIR)/file_handler.o: $(SRCDIR)/file_handler.cpp $(INCDIR)/file_handler.h
+$(OBJDIR)/thread_pool.o: $(SRCDIR)/thread_pool.cpp $(INCDIR)/thread_pool.h
+$(OBJDIR)/json_handler.o: $(SRCDIR)/json_handler.cpp $(INCDIR)/json_handler.h
+$(OBJDIR)/websocket_handler.o: $(SRCDIR)/websocket_handler.cpp $(INCDIR)/websocket_handler.h

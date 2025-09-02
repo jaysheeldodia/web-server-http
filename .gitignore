@@ -33,6 +33,7 @@ bin/
 obj/
 Debug/
 Release/
+config/
 
 # IDE and Editor files
 .vscode/
