@@ -221,12 +221,14 @@ bool WebSocketHandler::is_websocket_request(const std::map<std::string, std::str
     auto connection_it = headers.find("connection");
     auto upgrade_it = headers.find("upgrade");
     auto ws_key_it = headers.find("sec-websocket-key");
-    
-    return connection_it != headers.end() && 
-           upgrade_it != headers.end() &&
-           ws_key_it != headers.end() &&
-           connection_it->second.find("Upgrade") != std::string::npos &&
-           upgrade_it->second == "websocket";
+    // Values for Connection/Upgrade are case-insensitive per RFC 6455 / HTTP
+    auto to_lower = [](std::string v){ std::transform(v.begin(), v.end(), v.begin(), ::tolower); return v; };
+    if (connection_it == headers.end() || upgrade_it == headers.end() || ws_key_it == headers.end()) {
+        return false;
+    }
+    std::string connection_val = to_lower(connection_it->second);
+    std::string upgrade_val = to_lower(upgrade_it->second);
+    return (connection_val.find("upgrade") != std::string::npos) && upgrade_val == "websocket";
 }
 
 std::string WebSocketHandler::generate_websocket_response(const std::map<std::string, std::string>& headers) const {
@@ -279,6 +281,12 @@ std::string WebSocketHandler::sha1_hash(const std::string& input) const {
 
 bool WebSocketHandler::handle_websocket_connection(int client_socket, const std::string& client_id) {
     add_connection(client_socket, client_id);
+    // Send an initial snapshot so clients populate immediately without waiting for broadcast cycle
+    if (metrics) {
+        send_message_to_client(client_id, metrics->get_metrics_json());
+        send_message_to_client(client_id, metrics->get_system_metrics_json());
+        send_message_to_client(client_id, metrics->get_request_rate_json());
+    }
     
     std::vector<uint8_t> buffer(4096);
     
@@ -614,6 +622,10 @@ void WebSocketHandler::broadcast_loop_safe() {
             if (metrics && running.load() && !coordinator.is_shutdown_requested()) {
                 auto system_metrics = metrics->get_system_metrics_json();
                 broadcast_message_safe(system_metrics);
+                // Also broadcast basic aggregate metrics so clients that rely on 'metrics' type update
+                // without needing to send a request can function immediately.
+                auto basic_metrics = metrics->get_metrics_json();
+                broadcast_message_safe(basic_metrics);
             }
             
             // Broadcast request rate every 5 seconds

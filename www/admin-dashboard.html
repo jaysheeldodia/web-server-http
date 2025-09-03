@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Dashboard - C++ WebServer</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <!-- Date adapter required for time scale -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -634,6 +636,12 @@
                     console.log('WebSocket connected');
                     isConnected = true;
                     updateConnectionStatus('connected', 'Connected');
+                    // Proactively request all metric types (server also pushes, but this ensures first frame).
+                    try {
+                        ws.send('request_metrics');
+                        ws.send('system_metrics');
+                        ws.send('request_rate');
+                    } catch(e) { console.warn('Initial metric request failed', e); }
                 };
                 
                 ws.onmessage = function(event) {
@@ -719,7 +727,7 @@
             requestRateChart.update('none');
         }
 
-        function updateSystemMetricsChart(data) {
+    function updateSystemMetricsChart(data) {
             if (!systemMetricsChart || !data || !Array.isArray(data)) return;
             
             const recent = data.slice(-20);
@@ -746,7 +754,15 @@
                 updateChangeIndicator('connectionsChange', latest.active_connections, lastMetrics.active_connections);
                 updateChangeIndicator('queueChange', latest.queue_size, lastMetrics.queue_size);
                 
+                // Merge latest system metrics
                 lastMetrics = { ...lastMetrics, ...latest };
+                // Also update basic metrics if standalone 'metrics' frame hasn't arrived yet
+                if (!lastMetrics.total_requests || typeof lastMetrics.requests_per_minute === 'undefined') {
+                    updateBasicMetrics({
+                        total_requests: latest.total_requests,
+                        requests_per_minute: (latest.requests_per_second || 0) * 60
+                    });
+                }
             }
         }
 
@@ -833,8 +849,9 @@
             setInterval(() => {
                 if (isConnected && ws && ws.readyState === WebSocket.OPEN) {
                     ws.send('system_metrics');
+                    ws.send('request_metrics');
                 }
-            }, 30000);
+            }, 10000);
         });
 
         // Handle page visibility changes
