@@ -1,0 +1,173 @@
+# Professional HTTP/2 Web Server Makefile
+# Enhanced structure with organized build system
+
+# === COMPILER AND FLAGS ===
+CXX = g++
+CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -pthread
+LDFLAGS = -pthread -lssl -lcrypto -lnghttp2
+
+# === DIRECTORIES ===
+SRCDIR = src
+INCDIR = include
+BUILDDIR = build
+BINDIR = bin
+TESTDIR = tests
+TOOLSDIR = tools
+OBJDIR = $(BUILDDIR)/obj
+
+# === SOURCE STRUCTURE ===
+CORE_SRCDIR = $(SRCDIR)/core
+HANDLERS_SRCDIR = $(SRCDIR)/handlers
+NETWORK_SRCDIR = $(SRCDIR)/network
+UTILS_SRCDIR = $(SRCDIR)/utils
+
+CORE_INCDIR = $(INCDIR)/core
+HANDLERS_INCDIR = $(INCDIR)/handlers
+NETWORK_INCDIR = $(INCDIR)/network
+UTILS_INCDIR = $(INCDIR)/utils
+
+# === SOURCE FILES ===
+CORE_SOURCES = $(wildcard $(CORE_SRCDIR)/*.cpp)
+HANDLERS_SOURCES = $(wildcard $(HANDLERS_SRCDIR)/*.cpp)
+NETWORK_SOURCES = $(wildcard $(NETWORK_SRCDIR)/*.cpp)
+UTILS_SOURCES = $(wildcard $(UTILS_SRCDIR)/*.cpp)
+
+ALL_SOURCES = $(CORE_SOURCES) $(HANDLERS_SOURCES) $(NETWORK_SOURCES) $(UTILS_SOURCES)
+
+# === OBJECT FILES ===
+CORE_OBJECTS = $(CORE_SOURCES:$(CORE_SRCDIR)/%.cpp=$(OBJDIR)/core/%.o)
+HANDLERS_OBJECTS = $(HANDLERS_SOURCES:$(HANDLERS_SRCDIR)/%.cpp=$(OBJDIR)/handlers/%.o)
+NETWORK_OBJECTS = $(NETWORK_SOURCES:$(NETWORK_SRCDIR)/%.cpp=$(OBJDIR)/network/%.o)
+UTILS_OBJECTS = $(UTILS_SOURCES:$(UTILS_SRCDIR)/%.cpp=$(OBJDIR)/utils/%.o)
+
+ALL_OBJECTS = $(CORE_OBJECTS) $(HANDLERS_OBJECTS) $(NETWORK_OBJECTS) $(UTILS_OBJECTS)
+SERVER_OBJECTS = $(filter-out $(OBJDIR)/core/main.o, $(ALL_OBJECTS))
+
+# === HEADERS ===
+ALL_HEADERS = $(wildcard $(CORE_INCDIR)/*.h) $(wildcard $(HANDLERS_INCDIR)/*.h) \
+              $(wildcard $(NETWORK_INCDIR)/*.h) $(wildcard $(UTILS_INCDIR)/*.h)
+
+# === TARGETS ===
+TARGET = $(BINDIR)/webserver
+TEST_TARGETS = $(BINDIR)/load_tester $(BINDIR)/server_tester $(BINDIR)/unit_tests
+
+# === INCLUDE PATHS ===
+# Using relative paths in source files, so no complex include paths needed
+INCLUDE_PATHS = 
+
+# === DEFAULT TARGET ===
+.PHONY: all clean test install help debug release
+
+all: $(TARGET)
+
+# === MAIN APPLICATION ===
+$(TARGET): $(ALL_OBJECTS) | $(BINDIR)
+	@echo "🔗 Linking webserver..."
+	$(CXX) $(ALL_OBJECTS) -o $@ $(LDFLAGS)
+	@echo "✅ Build complete: $@"
+
+# === OBJECT FILE COMPILATION ===
+$(OBJDIR)/core/%.o: $(CORE_SRCDIR)/%.cpp $(ALL_HEADERS) | $(OBJDIR)/core
+	@echo "🔨 Compiling core: $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDE_PATHS) -c $< -o $@
+
+$(OBJDIR)/handlers/%.o: $(HANDLERS_SRCDIR)/%.cpp $(ALL_HEADERS) | $(OBJDIR)/handlers
+	@echo "🔨 Compiling handler: $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDE_PATHS) -c $< -o $@
+
+$(OBJDIR)/network/%.o: $(NETWORK_SRCDIR)/%.cpp $(ALL_HEADERS) | $(OBJDIR)/network
+	@echo "🔨 Compiling network: $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDE_PATHS) -c $< -o $@
+
+$(OBJDIR)/utils/%.o: $(UTILS_SRCDIR)/%.cpp $(ALL_HEADERS) | $(OBJDIR)/utils
+	@echo "🔨 Compiling utils: $<"
+	$(CXX) $(CXXFLAGS) $(INCLUDE_PATHS) -c $< -o $@
+
+# === DIRECTORY CREATION ===
+$(BINDIR):
+	@mkdir -p $(BINDIR)
+
+$(OBJDIR)/core:
+	@mkdir -p $(OBJDIR)/core
+
+$(OBJDIR)/handlers:
+	@mkdir -p $(OBJDIR)/handlers
+
+$(OBJDIR)/network:
+	@mkdir -p $(OBJDIR)/network
+
+$(OBJDIR)/utils:
+	@mkdir -p $(OBJDIR)/utils
+
+# === BUILD VARIANTS ===
+debug: CXXFLAGS += -g -DDEBUG -O0
+debug: $(TARGET)
+	@echo "🐛 Debug build complete"
+
+release: CXXFLAGS += -DNDEBUG -O3
+release: $(TARGET)
+	@echo "🚀 Release build complete"
+
+# === TESTING ===
+test: $(TARGET)
+	@echo "🧪 Running tests..."
+	@echo "Test script not found. Running basic server test..."
+	@timeout 10s $(TARGET) & \
+	sleep 2; \
+	curl -s http://localhost:8080/ > /dev/null && echo "✓ HTTP test passed" || echo "✗ HTTP test failed"; \
+	pkill -f webserver || true
+
+# === CLEANUP ===
+clean:
+	@echo "🧹 Cleaning build artifacts..."
+	rm -rf $(BUILDDIR) $(BINDIR)
+	rm -f *.log core core.*
+	@echo "✅ Clean complete"
+
+# === INFORMATION ===
+help:
+	@echo "🔧 Available targets:"
+	@echo "  all          - Build main application (default)"
+	@echo "  debug        - Build with debug symbols"
+	@echo "  release      - Build optimized release version"
+	@echo "  test         - Run integration tests"
+	@echo "  clean        - Remove build artifacts"
+	@echo "  help         - Show this help"
+	@echo "  info         - Show project information"
+
+info:
+	@echo "📊 Project Information:"
+	@echo "  Source files: $(words $(ALL_SOURCES))"
+	@echo "  Header files: $(words $(ALL_HEADERS))"
+	@echo "  Core modules: $(words $(CORE_SOURCES))"
+	@echo "  Handlers: $(words $(HANDLERS_SOURCES))"
+	@echo "  Network: $(words $(NETWORK_SOURCES))"
+	@echo "  Utils: $(words $(UTILS_SOURCES))"
+	@echo "  Compiler: $(CXX)"
+	@echo "  Flags: $(CXXFLAGS)"
+	@echo "  Libraries: $(LDFLAGS)"
+
+# === LEGACY TOOLS (for compatibility) ===
+load_tester: tools/load_test.cpp
+	@echo "🔨 Building load tester..."
+	$(CXX) $(CXXFLAGS) -o $(BINDIR)/load_tester $< $(LDFLAGS)
+
+server_tester: tools/server_test.cpp
+	@echo "🔨 Building server tester..."
+	$(CXX) $(CXXFLAGS) -o $(BINDIR)/server_tester $< $(LDFLAGS)
+
+debug_test: tools/debug_test.cpp
+	@echo "🔨 Building debug test..."
+	$(CXX) $(CXXFLAGS) -o $(BINDIR)/debug_test $< $(LDFLAGS)
+
+tools: load_tester server_tester debug_test
+	@echo "✅ All tools built successfully"
+
+# === PHONY TARGETS ===
+.PHONY: all clean test help debug release info load_tester server_tester debug_test tools
+
+# === DEPENDENCY TRACKING ===
+-include $(ALL_OBJECTS:.o=.d)
+
+$(OBJDIR)/%.d: ;
+.PRECIOUS: $(OBJDIR)/%.d
