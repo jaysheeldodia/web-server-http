@@ -1,103 +1,161 @@
-# C++ Multithreaded HTTP Webserver
+# C++ WebServer Documentation
 
-A high-performance, multithreaded HTTP webserver written in C++. This project demonstrates modern C++ techniques for building a robust, extensible webserver with support for static file serving, Keep-Alive connections, configurable thread pool, and more.
+A comprehensive documentation website for the high-performance C++ WebServer project. This documentation provides detailed guides, API references, and examples for developers.
 
-## Features
+## 🌐 Live Documentation
 
-- **Multithreaded Request Handling:** Efficiently handles multiple simultaneous connections using a thread pool.
-- **Configurable Server:** Set port, document root, thread count, Keep-Alive, and timeout via command-line options.
-- **Static File Serving:** Serves HTML, CSS, JSON, and other static files from the `www/` directory.
-- **Keep-Alive Support:** Optional persistent connections for improved performance.
-- **Graceful Shutdown:** Handles signals for safe server termination.
-- **Request Logging:** Tracks and logs incoming requests.
-- **Extensible Design:** Modular codebase with clear separation (server, HTTP request, file handler, thread pool).
-- **Unit & Load Testing:** Includes test utilities for server validation and benchmarking.
+The documentation is available as a GitHub Pages site with a professional dark theme and responsive design.
 
-## Directory Structure
+## 📋 Documentation Structure
+
+### Getting Started
+- **Overview** - Project introduction and highlights
+- **Features** - Complete feature list with descriptions
+- **Quick Start** - Get up and running in minutes
+- **Installation** - Platform-specific installation guides
+- **Configuration** - Server configuration options
+
+### Architecture
+- **Overview** - System architecture and design principles
+- **Thread Pool** - Multi-threaded request handling
+- **HTTP/2 Support** - Modern protocol implementation
+- **WebSocket Support** - Real-time communication features
+- **Performance Metrics** - Monitoring and analytics
+
+### API Reference
+- **REST Endpoints** - Complete REST API documentation
+- **WebSocket API** - Real-time communication protocols
+- **HTTP/2 Features** - Advanced protocol features
+
+### Dashboard
+- **Admin Dashboard** - Real-time server monitoring
+- **Performance Monitoring** - Metrics and analytics
+- **Real-time Metrics** - Live performance data
+
+### Development
+- **Building** - Build system and compilation
+- **Testing** - Test suite and validation
+- **Contributing** - Development guidelines
+- **Benchmarks** - Performance test results
+
+### Examples
+- **Basic Usage** - Getting started examples
+- **Advanced Configuration** - Complex setup scenarios
+- **Stress Testing** - Performance testing guides
+
+## 🎨 Design Features
+
+### Visual Design
+- **Dark Theme**: Soft charcoal gray background (#2c2c2c) for reduced eye strain
+- **Accent Color**: Bright vibrant yellow (#ffd700) for highlights and navigation
+- **Typography**: Modern Inter/system fonts for optimal readability
+- **No Gradients**: Clean, flat design without distracting visual effects
+- **Professional Layout**: Structured grid system with proper spacing
+
+### User Experience
+- **Responsive Design**: Works seamlessly on desktop, tablet, and mobile
+- **Sidebar Navigation**: Fixed sidebar with collapsible sections
+- **Search Functionality**: Quick access to documentation sections
+- **Interactive Elements**: Smooth transitions and hover effects
+- **Code Highlighting**: Syntax highlighting for code examples
+
+### Accessibility
+- **High Contrast**: Excellent readability with WCAG compliance
+- **Keyboard Navigation**: Full keyboard accessibility support
+- **Screen Reader Friendly**: Semantic HTML with proper ARIA labels
+- **Mobile Optimized**: Touch-friendly interface on mobile devices
+
+## 🚀 Key Sections
+
+### Admin Dashboard Documentation
+Comprehensive guide to the real-time admin dashboard including:
+- Performance metrics display
+- Real-time charts and graphs
+- WebSocket connectivity
+- Interactive features and controls
+
+### API Reference
+Complete documentation for:
+- RESTful endpoints with request/response examples
+- WebSocket message protocols
+- HTTP/2 specific features
+- Authentication and security
+
+### Performance Benchmarks
+Detailed performance analysis including:
+- Throughput measurements
+- Latency statistics
+- Resource utilization data
+- Comparison with other servers
+
+## 📦 Files Structure
 
 ```
-.
-├── include/         # Header files (server, http_request, file_handler, thread_pool)
-├── src/             # Source files (main.cpp, server.cpp, etc.)
-├── www/             # Static web content (HTML, CSS, JSON)
-├── tests/           # Test scripts and utilities
-├── Makefile         # Build instructions
-├── README.md        # Project documentation
+docs-website/
+├── index.html          # Main documentation page
+├── _config.yml         # GitHub Pages configuration
+├── README.md           # This documentation overview
+└── assets/             # Static assets (CSS, JS, images)
 ```
 
-## Getting Started
+## 🛠 Local Development
 
-### Prerequisites
-
-- Linux (tested on Ubuntu)
-- g++ (C++14 or newer)
-- Make
-
-### Build
+To preview the documentation locally:
 
 ```bash
-make
+# Navigate to docs-website directory
+cd docs-website
+
+# Serve with any local server
+python3 -m http.server 8000
+# or
+npx serve .
+# or
+php -S localhost:8000
+
+# Open in browser
+open http://localhost:8000
 ```
 
-This will build the main server executable (`webserver`), load tester, and server tester.
+## 📖 Content Guidelines
 
-### Run the Server
+### Writing Style
+- **Clear and Concise**: Direct, actionable content
+- **Code Examples**: Working examples for all features
+- **Visual Aids**: Tables, lists, and formatted code blocks
+- **Progressive Disclosure**: Simple to complex information flow
 
-```bash
-./webserver [OPTIONS]
-```
+### Code Examples
+- **Complete Examples**: Copy-paste ready code snippets
+- **Multiple Languages**: Examples in various programming languages
+- **Error Handling**: Include proper error handling patterns
+- **Best Practices**: Demonstrate recommended approaches
 
-#### Options
+## 🔧 GitHub Pages Configuration
 
-- `-p, --port PORT` &nbsp;&nbsp;&nbsp;&nbsp;Server port (default: 8080)
-- `-d, --docroot PATH` &nbsp;&nbsp;Document root directory (default: ./www)
-- `-t, --threads COUNT` &nbsp;&nbsp;Thread pool size (default: 4)
-- `-k, --keep-alive` &nbsp;&nbsp;&nbsp;&nbsp;Enable Keep-Alive (default: enabled)
-- `-T, --timeout SECONDS` &nbsp;&nbsp;Keep-Alive timeout (default: 5)
-- `-h, --help` &nbsp;&nbsp;&nbsp;&nbsp;Show help message
+The documentation is configured for GitHub Pages deployment with:
+- Automatic deployment from main branch
+- Custom domain support ready
+- Jekyll processing disabled (static HTML)
+- Search engine optimization enabled
 
-#### Examples
+## 📊 Analytics and Monitoring
 
-```bash
-./webserver
-./webserver -p 8081
-./webserver -d ./www -t 8
-./webserver -k -T 10
-```
+Features for tracking documentation usage:
+- Google Analytics integration ready
+- User behavior tracking
+- Popular sections analysis
+- Search query monitoring
 
-### Accessing the Server
+## 🎯 Future Enhancements
 
-Open your browser and navigate to:
+Planned improvements:
+- Interactive API explorer
+- Video tutorials and demos
+- Downloadable PDF version
+- Multi-language support
+- Community contribution guidelines
 
-```
-http://localhost:8080/
-```
+---
 
-Static files are served from the `www/` directory.
-
-## Testing
-
-- **Unit Tests:** Run `server_test.cpp` and other test files in `tests/` for validation.
-- **Load Testing:** Use `load_tester` to benchmark server performance.
-
-## Code Overview
-
-- **`main.cpp`**: Entry point, parses arguments, starts server.
-- **`server.h/cpp`**: Core server logic, connection handling, graceful shutdown.
-- **`http_request.h/cpp`**: HTTP request parsing and validation.
-- **`file_handler.h/cpp`**: Static file serving, MIME type resolution.
-- **`thread_pool.h/cpp`**: Thread pool implementation for concurrent request processing.
-
-## Extending
-
-- Add new HTTP methods or features by extending `HttpRequest` and `WebServer`.
-- Customize MIME types in `FileHandler`.
-- Add new tests in the `tests/` directory.
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
-
-## Author
-
-[jaysheeldodia](https://github.com/jaysheeldodia)
+This documentation provides everything developers need to understand, implement, and extend the C++ WebServer project. The professional design and comprehensive content make it suitable for both newcomers and experienced developers.
