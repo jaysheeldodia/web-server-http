@@ -1,0 +1,127 @@
+/* Additional CSS for GitHub Pages compatibility */
+
+/* Ensure consistent rendering across browsers */
+* {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+}
+
+/* GitHub Pages specific adjustments */
+.markdown-body {
+    background: #2c2c2c !important;
+    color: #ffffff !important;
+}
+
+/* Override GitHub's default styles */
+.highlight {
+    background: #1e1e1e !important;
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.highlight pre {
+    background: transparent !important;
+    border: none !important;
+    margin: 0;
+    padding: 0;
+}
+
+/* Code syntax highlighting for GitHub Pages */
+.highlight .c { color: #6272a4; } /* Comment */
+.highlight .k { color: #ff79c6; } /* Keyword */
+.highlight .s { color: #f1fa8c; } /* String */
+.highlight .nb { color: #8be9fd; } /* Name.Builtin */
+.highlight .nf { color: #50fa7b; } /* Name.Function */
+.highlight .nn { color: #ffb86c; } /* Name.Namespace */
+.highlight .mi { color: #bd93f9; } /* Literal.Number.Integer */
+.highlight .mf { color: #bd93f9; } /* Literal.Number.Float */
+
+/* Print styles */
+@media print {
+    body {
+        background: white !important;
+        color: black !important;
+    }
+    
+    .navbar,
+    .sidebar {
+        display: none !important;
+    }
+    
+    .main-content {
+        margin-left: 0 !important;
+        max-width: 100% !important;
+    }
+    
+    .card {
+        border: 1px solid #ccc !important;
+        background: white !important;
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    :root {
+        --bg-color: #000000;
+        --text-color: #ffffff;
+        --accent-color: #ffff00;
+    }
+    
+    body {
+        background: var(--bg-color) !important;
+        color: var(--text-color) !important;
+    }
+    
+    .navbar,
+    .sidebar,
+    .card {
+        background: var(--bg-color) !important;
+        border-color: var(--text-color) !important;
+    }
+    
+    h1, h2, h3, h4,
+    .navbar-brand,
+    .sidebar h3 {
+        color: var(--accent-color) !important;
+    }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+    
+    .content-section {
+        animation: none !important;
+    }
+}
+
+/* Focus styles for better accessibility */
+a:focus,
+button:focus {
+    outline: 3px solid #ffd700;
+    outline-offset: 2px;
+}
+
+/* Skip link for screen readers */
+.skip-link {
+    position: absolute;
+    top: -40px;
+    left: 6px;
+    background: #ffd700;
+    color: #2c2c2c;
+    padding: 8px;
+    text-decoration: none;
+    border-radius: 4px;
+    z-index: 10000;
+}
+
+.skip-link:focus {
+    top: 6px;
+}

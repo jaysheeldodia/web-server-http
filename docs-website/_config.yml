@@ -1,0 +1,39 @@
+# Disable Jekyll processing for GitHub Pages
+# This allows us to use a custom static HTML site
+
+# Site configuration for GitHub Pages
+name: "C++ WebServer Documentation"
+description: "Professional documentation for high-performance C++ WebServer with HTTP/2, WebSocket, and real-time monitoring"
+
+# GitHub Pages settings
+plugins: []
+markdown: kramdown
+highlighter: rouge
+
+# Custom settings
+title: "C++ WebServer Documentation"
+url: "https://jaysheeldodia.github.io"
+baseurl: "/web-server-http"
+
+# SEO and social
+author: "WebServer Development Team"
+twitter:
+  username: ""
+social:
+  name: "C++ WebServer"
+  links:
+    - "https://github.com/jaysheeldodia/web-server-http"
+
+# Build settings
+exclude:
+  - README.md
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor/bundle/
+  - vendor/cache/
+  - vendor/gems/
+  - vendor/ruby/
+
+# Enable GitHub Pages
+github: [metadata]

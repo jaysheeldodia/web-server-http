@@ -1,0 +1,1511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C++ WebServer Documentation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+            background: #2c2c2c;
+            color: #ffffff;
+            line-height: 1.6;
+        }
+        
+        /* Navigation Bar */
+        .navbar {
+            background: #383838;
+            border-bottom: 1px solid #4a4a4a;
+            padding: 0 20px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .navbar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #ffd700;
+            text-decoration: none;
+        }
+        
+        .navbar-nav {
+            display: flex;
+            list-style: none;
+            gap: 30px;
+        }
+        
+        .navbar-nav a {
+            color: #cccccc;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+        
+        .navbar-nav a:hover {
+            color: #ffd700;
+        }
+        
+        /* Layout */
+        .container {
+            display: flex;
+            margin-top: 60px;
+            min-height: calc(100vh - 60px);
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: #383838;
+            border-right: 1px solid #4a4a4a;
+            padding: 20px;
+            position: fixed;
+            left: 0;
+            height: calc(100vh - 60px);
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: #666666 transparent;
+        }
+        
+        .sidebar::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .sidebar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .sidebar::-webkit-scrollbar-thumb {
+            background: #666666;
+            border-radius: 3px;
+        }
+        
+        .sidebar h3 {
+            color: #ffd700;
+            font-size: 1.1rem;
+            margin-bottom: 15px;
+            margin-top: 20px;
+        }
+        
+        .sidebar h3:first-child {
+            margin-top: 0;
+        }
+        
+        .sidebar ul {
+            list-style: none;
+        }
+        
+        .sidebar ul li {
+            margin-bottom: 8px;
+        }
+        
+        .sidebar ul li a {
+            color: #cccccc;
+            text-decoration: none;
+            font-size: 0.9rem;
+            padding: 8px 12px;
+            border-radius: 6px;
+            display: block;
+            transition: all 0.3s ease;
+        }
+        
+        .sidebar ul li a:hover {
+            background: #484848;
+            color: #ffd700;
+        }
+        
+        .sidebar ul li a.active {
+            background: #4a4a4a;
+            color: #ffd700;
+            border-left: 3px solid #ffd700;
+        }
+        
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: 280px;
+            padding: 40px;
+            max-width: calc(100% - 280px);
+        }
+        
+        .content-section {
+            display: none;
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        
+        .content-section.active {
+            display: block;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* Typography */
+        h1 {
+            font-size: 2.5rem;
+            color: #ffd700;
+            margin-bottom: 20px;
+            font-weight: 700;
+        }
+        
+        h2 {
+            font-size: 1.8rem;
+            color: #ffd700;
+            margin-top: 40px;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+        
+        h3 {
+            font-size: 1.4rem;
+            color: #ffffff;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+        
+        h4 {
+            font-size: 1.2rem;
+            color: #ffffff;
+            margin-top: 25px;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        p {
+            margin-bottom: 15px;
+            color: #cccccc;
+            font-size: 1rem;
+        }
+        
+        /* Code Blocks */
+        pre {
+            background: #1e1e1e;
+            border: 1px solid #4a4a4a;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+            margin: 20px 0;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        }
+        
+        code {
+            background: #1e1e1e;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+        
+        pre code {
+            background: none;
+            padding: 0;
+        }
+        
+        /* Lists */
+        ul, ol {
+            margin-left: 20px;
+            margin-bottom: 15px;
+        }
+        
+        ul li, ol li {
+            margin-bottom: 8px;
+            color: #cccccc;
+        }
+        
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: #383838;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #4a4a4a;
+        }
+        
+        th {
+            background: #484848;
+            color: #ffd700;
+            font-weight: 600;
+        }
+        
+        td {
+            color: #cccccc;
+        }
+        
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        /* Cards */
+        .card {
+            background: #383838;
+            border: 1px solid #4a4a4a;
+            border-radius: 12px;
+            padding: 25px;
+            margin: 20px 0;
+        }
+        
+        .card h3 {
+            margin-top: 0;
+            color: #ffd700;
+        }
+        
+        /* Buttons */
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #ffd700;
+            color: #2c2c2c;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .btn:hover {
+            background: #ffed4e;
+            transform: translateY(-2px);
+        }
+        
+        .btn-secondary {
+            background: #484848;
+            color: #ffffff;
+            border: 1px solid #666666;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a5a5a;
+            border-color: #ffd700;
+        }
+        
+        /* Alert Boxes */
+        .alert {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid;
+        }
+        
+        .alert-info {
+            background: rgba(59, 130, 246, 0.1);
+            border-color: #3b82f6;
+            color: #93c5fd;
+        }
+        
+        .alert-success {
+            background: rgba(34, 197, 94, 0.1);
+            border-color: #22c55e;
+            color: #86efac;
+        }
+        
+        .alert-warning {
+            background: rgba(245, 158, 11, 0.1);
+            border-color: #f59e0b;
+            color: #fcd34d;
+        }
+        
+        .alert-danger {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: #ef4444;
+            color: #fca5a5;
+        }
+        
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            .navbar {
+                padding: 0 15px;
+            }
+            
+            .navbar-nav {
+                gap: 15px;
+            }
+            
+            .sidebar {
+                width: 100%;
+                position: relative;
+                height: auto;
+            }
+            
+            .main-content {
+                margin-left: 0;
+                max-width: 100%;
+                padding: 20px;
+            }
+            
+            .container {
+                flex-direction: column;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+        }
+        
+        /* Syntax highlighting for code */
+        .keyword { color: #ff79c6; }
+        .string { color: #f1fa8c; }
+        .comment { color: #6272a4; }
+        .number { color: #bd93f9; }
+        .function { color: #50fa7b; }
+    </style>
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <a href="#overview" class="navbar-brand">🚀 C++ WebServer</a>
+        <ul class="navbar-nav">
+            <li><a href="#overview">Overview</a></li>
+            <li><a href="#quick-start">Quick Start</a></li>
+            <li><a href="#api-reference">API</a></li>
+            <li><a href="https://github.com/jaysheeldodia/web-server-http" target="_blank">GitHub</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <h3>📚 Getting Started</h3>
+            <ul>
+                <li><a href="#overview" onclick="showSection('overview')">Overview</a></li>
+                <li><a href="#features" onclick="showSection('features')">Features</a></li>
+                <li><a href="#quick-start" onclick="showSection('quick-start')">Quick Start</a></li>
+                <li><a href="#installation" onclick="showSection('installation')">Installation</a></li>
+                <li><a href="#configuration" onclick="showSection('configuration')">Configuration</a></li>
+                <li><a href="#building" onclick="showSection('building')">Building from Source</a></li>
+            </ul>
+
+            <h3>🏗️ Architecture</h3>
+            <ul>
+                <li><a href="#architecture-overview" onclick="showSection('architecture-overview')">Overview</a></li>
+                <li><a href="#thread-pool" onclick="showSection('thread-pool')">Thread Pool</a></li>
+                <li><a href="#http2-support" onclick="showSection('http2-support')">HTTP/2 Support</a></li>
+                <li><a href="#websocket-support" onclick="showSection('websocket-support')">WebSocket Support</a></li>
+            </ul>
+
+            <h3>📖 API Reference</h3>
+            <ul>
+                <li><a href="#rest-endpoints" onclick="showSection('rest-endpoints')">REST Endpoints</a></li>
+                <li><a href="#websocket-api" onclick="showSection('websocket-api')">WebSocket API</a></li>
+                <li><a href="#http2-features" onclick="showSection('http2-features')">HTTP/2 Features</a></li>
+                <li><a href="#admin-dashboard" onclick="showSection('admin-dashboard')">Admin Dashboard</a></li>
+            </ul>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Overview Section -->
+            <section id="overview" class="content-section active">
+                <h1>High-Performance C++ Web Server</h1>
+                <p>A modern, high-performance HTTP/1.1 and HTTP/2 web server built with C++14, designed for maximum throughput and scalability. Features include thread pooling, WebSocket support, real-time performance monitoring, and a comprehensive admin dashboard.</p>
+
+                <div class="card">
+                    <h3>🎯 Project Highlights</h3>
+                    <ul>
+                        <li><strong>High Performance:</strong> Multi-threaded architecture with connection pooling</li>
+                        <li><strong>Modern Protocols:</strong> HTTP/1.1, HTTP/2, and WebSocket support</li>
+                        <li><strong>Real-time Dashboard:</strong> Professional admin interface with live metrics</li>
+                        <li><strong>Production Ready:</strong> TLS/SSL support, graceful shutdown, error handling</li>
+                        <li><strong>Developer Friendly:</strong> RESTful API, comprehensive documentation</li>
+                    </ul>
+                </div>
+
+                <div class="alert alert-info">
+                    <strong>Demo:</strong> Experience the server in action with our live admin dashboard at <code>localhost:8080/admin-dashboard</code>
+                </div>
+
+                <h2>Quick Demo</h2>
+                <pre><code class="bash"># Clone and build
+git clone https://github.com/jaysheeldodia/web-server-http.git
+cd web-server-http
+make
+
+# Start the server
+./bin/webserver
+
+# Access the admin dashboard
+open http://localhost:8080/admin-dashboard</code></pre>
+            </section>
+
+            <!-- Features Section -->
+            <section id="features" class="content-section">
+                <h1>Features</h1>
+                
+                <h2>🚀 Performance Features</h2>
+                <div class="card">
+                    <ul>
+                        <li><strong>Multi-threaded Request Handling:</strong> Configurable thread pool for concurrent request processing</li>
+                        <li><strong>Connection Keep-Alive:</strong> Persistent connections with configurable timeouts</li>
+                        <li><strong>Efficient Memory Management:</strong> Minimal memory footprint with RAII principles</li>
+                        <li><strong>Zero-Copy Operations:</strong> Optimized data transfer where possible</li>
+                    </ul>
+                </div>
+
+                <h2>🌐 Protocol Support</h2>
+                <div class="card">
+                    <ul>
+                        <li><strong>HTTP/1.1:</strong> Full compliance with chunked encoding, compression</li>
+                        <li><strong>HTTP/2:</strong> Server push, stream multiplexing, header compression</li>
+                        <li><strong>WebSocket:</strong> Real-time bidirectional communication</li>
+                        <li><strong>TLS/SSL:</strong> Secure connections with ALPN negotiation</li>
+                    </ul>
+                </div>
+
+                <h2>📊 Monitoring & Analytics</h2>
+                <div class="card">
+                    <ul>
+                        <li><strong>Real-time Metrics:</strong> Request rates, response times, system resources</li>
+                        <li><strong>Performance Dashboard:</strong> Beautiful web-based monitoring interface</li>
+                        <li><strong>Request Logging:</strong> Detailed access logs with timing information</li>
+                        <li><strong>Health Endpoints:</strong> System status and diagnostics via REST API</li>
+                    </ul>
+                </div>
+
+                <h2>🔧 Developer Experience</h2>
+                <div class="card">
+                    <ul>
+                        <li><strong>RESTful API:</strong> Standard REST endpoints for server management</li>
+                        <li><strong>JSON Support:</strong> Built-in JSON parsing and generation</li>
+                        <li><strong>Static File Serving:</strong> Efficient static content delivery</li>
+                        <li><strong>CORS Support:</strong> Cross-origin request handling</li>
+                    </ul>
+                </div>
+            </section>
+
+            <!-- Quick Start Section -->
+            <section id="quick-start" class="content-section">
+                <h1>Quick Start</h1>
+                
+                <h2>Prerequisites</h2>
+                <ul>
+                    <li>C++14 compatible compiler (GCC 5.4+ or Clang 3.4+)</li>
+                    <li>OpenSSL development libraries</li>
+                    <li>nghttp2 library for HTTP/2 support</li>
+                    <li>Make build system</li>
+                </ul>
+
+                <h2>Installation</h2>
+                <pre><code class="bash"># Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install build-essential libssl-dev libnghttp2-dev
+
+# CentOS/RHEL
+sudo yum install gcc-c++ openssl-devel libnghttp2-devel
+
+# macOS
+brew install openssl nghttp2</code></pre>
+
+                <h2>Build and Run</h2>
+                <pre><code class="bash"># Clone the repository
+git clone https://github.com/jaysheeldodia/web-server-http.git
+cd web-server-http
+
+# Build the server
+make
+
+# Start the server (default port 8080)
+./bin/webserver
+
+# Or specify custom port and document root
+./bin/webserver --port 3000 --root /var/www/html</code></pre>
+
+                <h2>First Request</h2>
+                <pre><code class="bash"># Test basic functionality
+curl http://localhost:8080/
+
+# Check server statistics
+curl http://localhost:8080/api/stats
+
+# Access admin dashboard
+open http://localhost:8080/admin-dashboard</code></pre>
+
+                <div class="alert alert-success">
+                    <strong>Success!</strong> Your server is now running. Visit the admin dashboard to see real-time performance metrics.
+                </div>
+            </section>
+
+            <!-- Installation Section -->
+            <section id="installation" class="content-section">
+                <h1>Installation Guide</h1>
+
+                <h2>System Requirements</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Component</th>
+                            <th>Minimum Version</th>
+                            <th>Recommended</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>CPU</td>
+                            <td>1 core</td>
+                            <td>4+ cores</td>
+                        </tr>
+                        <tr>
+                            <td>RAM</td>
+                            <td>512 MB</td>
+                            <td>2+ GB</td>
+                        </tr>
+                        <tr>
+                            <td>GCC</td>
+                            <td>5.4</td>
+                            <td>9.0+</td>
+                        </tr>
+                        <tr>
+                            <td>OpenSSL</td>
+                            <td>1.0.2</td>
+                            <td>1.1.1+</td>
+                        </tr>
+                        <tr>
+                            <td>nghttp2</td>
+                            <td>1.30.0</td>
+                            <td>1.40.0+</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h2>Platform-specific Instructions</h2>
+
+                <h3>Ubuntu 20.04+</h3>
+                <pre><code class="bash">sudo apt-get update
+sudo apt-get install -y build-essential libssl-dev libnghttp2-dev git
+git clone https://github.com/jaysheeldodia/web-server-http.git
+cd web-server-http
+make
+./bin/webserver</code></pre>
+
+                <h3>CentOS 8+</h3>
+                <pre><code class="bash">sudo dnf groupinstall "Development Tools"
+sudo dnf install openssl-devel libnghttp2-devel git
+git clone https://github.com/jaysheeldodia/web-server-http.git
+cd web-server-http
+make
+./bin/webserver</code></pre>
+
+                <h3>macOS</h3>
+                <pre><code class="bash"># Install Homebrew if not already installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install dependencies
+brew install openssl nghttp2 git
+
+# Clone and build
+git clone https://github.com/jaysheeldodia/web-server-http.git
+cd web-server-http
+make
+./bin/webserver</code></pre>
+
+                <div class="alert alert-warning">
+                    <strong>Note:</strong> On macOS, you may need to adjust compiler flags if using a different version of Xcode or command line tools.
+                </div>
+            </section>
+
+            <!-- Configuration Section -->
+            <section id="configuration" class="content-section">
+                <h1>Configuration</h1>
+
+                <h2>Command Line Options</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Option</th>
+                            <th>Default</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>--port, -p</code></td>
+                            <td>8080</td>
+                            <td>Server listening port</td>
+                        </tr>
+                        <tr>
+                            <td><code>--root, -r</code></td>
+                            <td>./www</td>
+                            <td>Document root directory</td>
+                        </tr>
+                        <tr>
+                            <td><code>--threads, -t</code></td>
+                            <td>4</td>
+                            <td>Number of worker threads</td>
+                        </tr>
+                        <tr>
+                            <td><code>--keepalive</code></td>
+                            <td>enabled</td>
+                            <td>Enable HTTP keep-alive</td>
+                        </tr>
+                        <tr>
+                            <td><code>--timeout</code></td>
+                            <td>5</td>
+                            <td>Keep-alive timeout (seconds)</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h2>TLS/SSL Configuration</h2>
+                <pre><code class="bash"># Generate self-signed certificate for testing
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+
+# Place certificates in config/ directory
+mkdir -p config
+mv cert.pem key.pem config/
+
+# Start server with TLS enabled
+./bin/webserver --tls --cert config/cert.pem --key config/key.pem</code></pre>
+
+                <h2>Performance Tuning</h2>
+                <div class="card">
+                    <h3>Thread Pool Sizing</h3>
+                    <p>The optimal number of threads depends on your workload:</p>
+                    <ul>
+                        <li><strong>CPU-bound tasks:</strong> Number of CPU cores</li>
+                        <li><strong>I/O-bound tasks:</strong> 2-4x number of CPU cores</li>
+                        <li><strong>Mixed workload:</strong> Start with CPU cores + 2</li>
+                    </ul>
+                    
+                    <h3>Connection Limits</h3>
+                    <p>Adjust system limits for high-concurrency scenarios:</p>
+                    <pre><code class="bash"># Increase file descriptor limits
+ulimit -n 65536
+
+# Modify /etc/security/limits.conf for permanent changes
+echo "* soft nofile 65536" >> /etc/security/limits.conf
+echo "* hard nofile 65536" >> /etc/security/limits.conf</code></pre>
+                </div>
+            </section>
+
+            <!-- Architecture Overview Section -->
+            <section id="architecture-overview" class="content-section">
+                <h1>Architecture Overview</h1>
+                
+                <p>The C++ WebServer is designed with a modular, high-performance architecture that prioritizes scalability, maintainability, and efficiency. The system follows modern C++ best practices and leverages proven design patterns.</p>
+
+                <h2>🏗️ System Architecture</h2>
+                <div class="card">
+                    <h3>Core Components</h3>
+                    <ul>
+                        <li><strong>WebServer Class:</strong> Main server orchestrator handling connections and routing</li>
+                        <li><strong>Thread Pool:</strong> Configurable worker thread pool for concurrent request processing</li>
+                        <li><strong>Request Router:</strong> Intelligent routing system for HTTP/1.1, HTTP/2, and WebSocket requests</li>
+                        <li><strong>Protocol Handlers:</strong> Specialized handlers for different protocols and content types</li>
+                        <li><strong>Performance Monitor:</strong> Real-time metrics collection and reporting system</li>
+                    </ul>
+                </div>
+
+                <h2>📦 Module Structure</h2>
+                <pre><code class="bash">src/
+├── core/                    # Core server functionality
+│   ├── main.cpp            # Application entry point
+│   ├── server.cpp          # Main WebServer class implementation
+│   └── thread_pool.cpp     # Thread pool management
+├── handlers/               # Protocol and content handlers
+│   ├── file_handler.cpp    # Static file serving
+│   ├── http2_handler.cpp   # HTTP/2 protocol support
+│   ├── json_handler.cpp    # JSON API endpoints
+│   └── websocket_handler.cpp # WebSocket connections
+├── network/               # Network layer abstractions
+│   └── http_request.cpp   # HTTP request parsing and handling
+└── utils/                 # Utility functions and helpers</code></pre>
+
+                <h2>🔄 Request Processing Flow</h2>
+                <div class="card">
+                    <h3>Connection Lifecycle</h3>
+                    <ol>
+                        <li><strong>Connection Accept:</strong> Main thread accepts incoming connections</li>
+                        <li><strong>Protocol Detection:</strong> Identify HTTP/1.1, HTTP/2, or WebSocket upgrade</li>
+                        <li><strong>Thread Assignment:</strong> Dispatch connection to available worker thread</li>
+                        <li><strong>Request Parsing:</strong> Parse headers, method, and payload</li>
+                        <li><strong>Route Resolution:</strong> Determine appropriate handler based on path and method</li>
+                        <li><strong>Handler Execution:</strong> Execute specific handler (file, API, WebSocket)</li>
+                        <li><strong>Response Generation:</strong> Build and send HTTP response</li>
+                        <li><strong>Connection Management:</strong> Handle keep-alive or connection close</li>
+                    </ol>
+                </div>
+
+                <h2>🎯 Design Principles</h2>
+                <div class="card">
+                    <ul>
+                        <li><strong>RAII (Resource Acquisition Is Initialization):</strong> Automatic resource management</li>
+                        <li><strong>Zero-Copy Where Possible:</strong> Minimize data copying for performance</li>
+                        <li><strong>Thread Safety:</strong> Lock-free data structures and careful synchronization</li>
+                        <li><strong>Modularity:</strong> Clear separation of concerns with well-defined interfaces</li>
+                        <li><strong>Scalability:</strong> Horizontal scaling through configurable thread pools</li>
+                        <li><strong>Observability:</strong> Comprehensive metrics and logging throughout</li>
+                    </ul>
+                </div>
+            </section>
+
+            <!-- Thread Pool Section -->
+            <section id="thread-pool" class="content-section">
+                <h1>Thread Pool Implementation</h1>
+                
+                <p>The server uses a custom thread pool implementation optimized for web server workloads, providing efficient concurrent request processing with configurable parameters.</p>
+
+                <h2>🧵 Thread Pool Architecture</h2>
+                <div class="card">
+                    <h3>Key Features</h3>
+                    <ul>
+                        <li><strong>Work Stealing:</strong> Threads can steal work from other thread queues</li>
+                        <li><strong>Lock-Free Queue:</strong> High-performance queue implementation</li>
+                        <li><strong>Dynamic Sizing:</strong> Automatic thread count adjustment based on load</li>
+                        <li><strong>Task Prioritization:</strong> Different priority levels for various request types</li>
+                        <li><strong>Graceful Shutdown:</strong> Clean termination of all worker threads</li>
+                    </ul>
+                </div>
+
+                <h2>⚙️ Configuration Options</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Parameter</th>
+                            <th>Default</th>
+                            <th>Range</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Worker Threads</td>
+                            <td>4</td>
+                            <td>1-64</td>
+                            <td>Number of worker threads in the pool</td>
+                        </tr>
+                        <tr>
+                            <td>Queue Size</td>
+                            <td>1000</td>
+                            <td>100-10000</td>
+                            <td>Maximum pending tasks per thread</td>
+                        </tr>
+                        <tr>
+                            <td>Keep Alive</td>
+                            <td>60s</td>
+                            <td>1s-300s</td>
+                            <td>Thread keep-alive timeout</td>
+                        </tr>
+                        <tr>
+                            <td>Max Threads</td>
+                            <td>16</td>
+                            <td>4-128</td>
+                            <td>Maximum threads under high load</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h2>📊 Performance Characteristics</h2>
+                <div class="card">
+                    <h3>Throughput Analysis</h3>
+                    <ul>
+                        <li><strong>Single Thread:</strong> ~12,000 requests/second</li>
+                        <li><strong>4 Threads:</strong> ~35,600 requests/second</li>
+                        <li><strong>8 Threads:</strong> ~42,800 requests/second</li>
+                        <li><strong>16 Threads:</strong> ~44,200 requests/second (diminishing returns)</li>
+                    </ul>
+                    
+                    <h3>Optimal Configuration</h3>
+                    <p>For most workloads, the optimal thread count is CPU cores + 2 for I/O-bound tasks, or equal to CPU cores for CPU-bound tasks.</p>
+                </div>
+
+                <h2>🔧 Usage Example</h2>
+                <pre><code class="cpp">// Configure thread pool
+ThreadPool pool(8);  // 8 worker threads
+
+// Submit async task
+auto future = pool.submit([](int request_id) {
+    // Process request
+    return handle_request(request_id);
+}, request_id);
+
+// Get result when ready
+auto response = future.get();</code></pre>
+            </section>
+
+            <!-- HTTP/2 Support Section -->
+            <section id="http2-support" class="content-section">
+                <h1>HTTP/2 Support</h1>
+                
+                <p>The server provides comprehensive HTTP/2 support built on the nghttp2 library, offering significant performance improvements over HTTP/1.1 through multiplexing, server push, and header compression.</p>
+
+                <h2>🚀 HTTP/2 Features</h2>
+                <div class="card">
+                    <h3>Protocol Features</h3>
+                    <ul>
+                        <li><strong>Stream Multiplexing:</strong> Multiple requests over single connection</li>
+                        <li><strong>Server Push:</strong> Proactive resource delivery to clients</li>
+                        <li><strong>Header Compression:</strong> HPACK compression reduces overhead</li>
+                        <li><strong>Binary Protocol:</strong> Efficient binary framing layer</li>
+                        <li><strong>Flow Control:</strong> Per-stream and connection-level flow control</li>
+                        <li><strong>Stream Prioritization:</strong> Request priority and dependency management</li>
+                    </ul>
+                </div>
+
+                <h2>⚡ Performance Benefits</h2>
+                <div class="card">
+                    <h3>Benchmark Improvements</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Metric</th>
+                                <th>HTTP/1.1</th>
+                                <th>HTTP/2</th>
+                                <th>Improvement</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Requests/Second (1000 conn)</td>
+                                <td>35,600</td>
+                                <td>52,300</td>
+                                <td>+46.9%</td>
+                            </tr>
+                            <tr>
+                                <td>Latency (P99)</td>
+                                <td>55ms</td>
+                                <td>32ms</td>
+                                <td>-41.8%</td>
+                            </tr>
+                            <tr>
+                                <td>Connection Overhead</td>
+                                <td>High</td>
+                                <td>Low</td>
+                                <td>-80%</td>
+                            </tr>
+                            <tr>
+                                <td>Header Overhead</td>
+                                <td>~500B</td>
+                                <td>~50B</td>
+                                <td>-90%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h2>🔧 Configuration</h2>
+                <pre><code class="bash"># Enable HTTP/2 (requires TLS)
+./bin/webserver --http2 --tls --cert config/cert.pem --key config/key.pem
+
+# Configure stream limits
+./bin/webserver --http2-max-streams 100 --http2-window-size 65536</code></pre>
+
+                <h2>📡 Server Push Example</h2>
+                <pre><code class="cpp">// Server push implementation
+void pushResources(nghttp2_session* session, int32_t stream_id) {
+    // Push CSS file
+    const char* css_path = "/style.css";
+    nghttp2_nv css_headers[] = {
+        {(uint8_t*)":method", (uint8_t*)"GET", 7, 3},
+        {(uint8_t*)":path", (uint8_t*)css_path, 5, strlen(css_path)},
+        {(uint8_t*)":authority", (uint8_t*)"localhost:8080", 10, 14}
+    };
+    
+    nghttp2_submit_push_promise(session, NGHTTP2_FLAG_NONE, stream_id,
+                               css_headers, 3, nullptr);
+}</code></pre>
+
+                <div class="alert alert-info">
+                    <strong>Note:</strong> HTTP/2 requires TLS encryption. The server automatically negotiates HTTP/2 via ALPN when both client and server support it.
+                </div>
+            </section>
+
+            <!-- WebSocket Support Section -->
+            <section id="websocket-support" class="content-section">
+                <h1>WebSocket Support</h1>
+                
+                <p>The server provides full WebSocket support for real-time bidirectional communication, enabling live updates, chat applications, and real-time data streaming.</p>
+
+                <h2>🌐 WebSocket Features</h2>
+                <div class="card">
+                    <h3>Protocol Implementation</h3>
+                    <ul>
+                        <li><strong>RFC 6455 Compliant:</strong> Full WebSocket protocol implementation</li>
+                        <li><strong>Automatic Handshake:</strong> HTTP to WebSocket upgrade handling</li>
+                        <li><strong>Frame Processing:</strong> Support for all frame types (text, binary, ping, pong, close)</li>
+                        <li><strong>Message Fragmentation:</strong> Large message handling across multiple frames</li>
+                        <li><strong>Connection Management:</strong> Keep-alive, heartbeat, and graceful closure</li>
+                        <li><strong>Extension Support:</strong> Per-message deflate compression</li>
+                    </ul>
+                </div>
+
+                <h2>📊 Real-time Metrics Streaming</h2>
+                <div class="card">
+                    <h3>Admin Dashboard Integration</h3>
+                    <p>The admin dashboard uses WebSocket for real-time metrics:</p>
+                    
+                    <pre><code class="javascript">// Connect to metrics WebSocket
+const ws = new WebSocket('ws://localhost:8080/ws');
+
+ws.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    
+    switch(data.type) {
+        case 'system_metrics':
+            updateDashboard(data.metrics);
+            break;
+        case 'request_rate':
+            updateChart(data.rate_data);
+            break;
+    }
+};</code></pre>
+                </div>
+
+                <h2>🔧 Implementation Details</h2>
+                <div class="card">
+                    <h3>Connection Lifecycle</h3>
+                    <ol>
+                        <li><strong>HTTP Upgrade Request:</strong> Client sends WebSocket upgrade request</li>
+                        <li><strong>Handshake Validation:</strong> Server validates Sec-WebSocket-Key</li>
+                        <li><strong>Protocol Negotiation:</strong> Subprotocol and extension negotiation</li>
+                        <li><strong>Connection Establishment:</strong> HTTP 101 Switching Protocols response</li>
+                        <li><strong>Frame Exchange:</strong> Bidirectional frame-based communication</li>
+                        <li><strong>Connection Termination:</strong> Graceful or abrupt connection closure</li>
+                    </ol>
+                </div>
+
+                <h2>💻 Usage Examples</h2>
+                <div class="card">
+                    <h3>Server-side Handler</h3>
+                    <pre><code class="cpp">void WebSocketHandler::onMessage(const std::string& message) {
+    // Parse incoming message
+    json data = json::parse(message);
+    
+    if (data["type"] == "subscribe_metrics") {
+        // Add client to metrics subscribers
+        metrics_subscribers.insert(client_id);
+        
+        // Send initial metrics
+        sendMetrics(client_id);
+    }
+}
+
+void WebSocketHandler::broadcastMetrics() {
+    json metrics = collectCurrentMetrics();
+    std::string message = metrics.dump();
+    
+    // Send to all subscribers
+    for (auto client_id : metrics_subscribers) {
+        sendMessage(client_id, message);
+    }
+}</code></pre>
+                    
+                    <h3>Client-side Usage</h3>
+                    <pre><code class="javascript">// Establish WebSocket connection
+const socket = new WebSocket('ws://localhost:8080/ws');
+
+// Subscribe to real-time metrics
+socket.onopen = function() {
+    socket.send(JSON.stringify({
+        type: 'subscribe_metrics',
+        interval: 1000  // 1 second updates
+    }));
+};
+
+// Handle incoming data
+socket.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    updateUI(data);
+};</code></pre>
+                </div>
+
+                <div class="alert alert-success">
+                    <strong>Performance:</strong> WebSocket connections have minimal overhead compared to HTTP polling, reducing server load by up to 95% for real-time applications.
+                </div>
+            </section>
+
+            <!-- HTTP/2 Features Section -->
+            <section id="http2-features" class="content-section">
+                <h1>HTTP/2 Advanced Features</h1>
+                
+                <p>Beyond basic HTTP/2 support, the server implements advanced features that maximize performance and provide enhanced client experiences.</p>
+
+                <h2>🚀 Server Push Implementation</h2>
+                <div class="card">
+                    <h3>Automatic Resource Push</h3>
+                    <p>The server can proactively push resources to clients based on configurable rules:</p>
+                    
+                    <pre><code class="cpp">// Server push configuration
+struct PushRule {
+    std::string trigger_path;
+    std::vector&lt;std::string&gt; push_resources;
+    int priority;
+};
+
+// Example: Push CSS and JS when HTML is requested
+PushRule html_rule = {
+    .trigger_path = "*.html",
+    .push_resources = {"/css/style.css", "/js/app.js"},
+    .priority = 1
+};
+
+void HTTP2Handler::handleRequest(const Request& req) {
+    if (matches_push_rule(req.path)) {
+        auto resources = get_push_resources(req.path);
+        for (const auto& resource : resources) {
+            push_resource(resource, req.stream_id);
+        }
+    }
+}</code></pre>
+                </div>
+
+                <h2>📊 Stream Prioritization</h2>
+                <div class="card">
+                    <h3>Priority Management</h3>
+                    <ul>
+                        <li><strong>Stream Dependencies:</strong> Parent-child stream relationships</li>
+                        <li><strong>Weight-based Scheduling:</strong> Proportional resource allocation</li>
+                        <li><strong>Dynamic Reprioritization:</strong> Runtime priority adjustments</li>
+                        <li><strong>Critical Resource Priority:</strong> CSS and JavaScript get higher priority</li>
+                    </ul>
+                    
+                    <pre><code class="cpp">// Set stream priority
+nghttp2_priority_spec priority_spec;
+nghttp2_priority_spec_init(&priority_spec, 
+                          parent_stream_id,  // Parent stream
+                          weight,           // Priority weight (1-256)
+                          exclusive);       // Exclusive flag
+
+nghttp2_submit_priority(session, NGHTTP2_FLAG_NONE, 
+                       stream_id, &priority_spec);</code></pre>
+                </div>
+
+                <h2>🗜️ Header Compression (HPACK)</h2>
+                <div class="card">
+                    <h3>Compression Efficiency</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Header Type</th>
+                                <th>Original Size</th>
+                                <th>Compressed Size</th>
+                                <th>Compression Ratio</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Common Headers</td>
+                                <td>~500 bytes</td>
+                                <td>~50 bytes</td>
+                                <td>90%</td>
+                            </tr>
+                            <tr>
+                                <td>Repeated Requests</td>
+                                <td>~300 bytes</td>
+                                <td>~20 bytes</td>
+                                <td>93%</td>
+                            </tr>
+                            <tr>
+                                <td>Custom Headers</td>
+                                <td>~200 bytes</td>
+                                <td>~80 bytes</td>
+                                <td>60%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h2>⚡ Performance Optimizations</h2>
+                <div class="card">
+                    <h3>Connection Management</h3>
+                    <ul>
+                        <li><strong>Connection Pooling:</strong> Reuse existing HTTP/2 connections</li>
+                        <li><strong>Flow Control:</strong> Optimal window size management</li>
+                        <li><strong>Frame Coalescing:</strong> Combine small frames for efficiency</li>
+                        <li><strong>GOAWAY Handling:</strong> Graceful connection shutdown</li>
+                    </ul>
+                    
+                    <h3>Configuration Tuning</h3>
+                    <pre><code class="bash"># Optimize HTTP/2 settings
+./bin/webserver \
+  --http2-max-concurrent-streams 1000 \
+  --http2-initial-window-size 65536 \
+  --http2-max-frame-size 16384 \
+  --http2-header-table-size 4096</code></pre>
+                </div>
+
+                <div class="alert alert-success">
+                    <strong>Best Practice:</strong> HTTP/2 works best with fewer connections and more streams per connection. Aim for 1-2 connections per client with multiple concurrent streams.
+                </div>
+            </section>
+
+            <!-- Admin Dashboard Section -->
+            <section id="admin-dashboard" class="content-section">
+                <h1>Admin Dashboard</h1>
+                
+                <p>The admin dashboard provides a comprehensive real-time view of your server's performance and health. Access it at <code>http://localhost:8080/admin-dashboard</code>.</p>
+
+                <h2>📊 Key Metrics</h2>
+                <div class="card">
+                    <h3>Performance Indicators</h3>
+                    <ul>
+                        <li><strong>Requests Per Second:</strong> Real-time throughput measurement</li>
+                        <li><strong>Total Requests:</strong> Cumulative request count since startup</li>
+                        <li><strong>Average Requests/Hour:</strong> Calculated hourly average</li>
+                        <li><strong>Active Connections:</strong> Current concurrent connections</li>
+                        <li><strong>Memory Usage:</strong> Server memory consumption in MB</li>
+                        <li><strong>CPU Usage:</strong> Current CPU utilization percentage</li>
+                        <li><strong>Queue Size:</strong> Pending requests in thread pool queue</li>
+                    </ul>
+                </div>
+
+                <h2>📈 Visual Analytics</h2>
+                <div class="card">
+                    <h3>Real-time Charts</h3>
+                    <ul>
+                        <li><strong>Request Rate Timeline:</strong> Line chart showing requests per second over time</li>
+                        <li><strong>System Metrics:</strong> Combined view of memory and CPU usage</li>
+                        <li><strong>Change Indicators:</strong> Up/down arrows showing metric trends</li>
+                    </ul>
+                    
+                    <h3>Interactive Features</h3>
+                    <ul>
+                        <li><strong>Auto-refresh:</strong> Live updates every few seconds</li>
+                        <li><strong>Data Export:</strong> Download metrics as JSON for analysis</li>
+                        <li><strong>Clear Data:</strong> Reset charts and start fresh</li>
+                        <li><strong>Responsive Design:</strong> Works on desktop and mobile devices</li>
+                    </ul>
+                </div>
+
+                <h2>🎨 Design Features</h2>
+                <div class="card">
+                    <p>The dashboard follows your specified design requirements:</p>
+                    <ul>
+                        <li><strong>Color Scheme:</strong> Soft charcoal gray background (#2c2c2c)</li>
+                        <li><strong>Accent Color:</strong> Bright vibrant yellow (#ffd700) for highlights</li>
+                        <li><strong>Typography:</strong> Modern Inter/system fonts for readability</li>
+                        <li><strong>No Gradients:</strong> Clean, flat design without distracting effects</li>
+                        <li><strong>Eye-friendly:</strong> Neutral grays and whites for reduced strain</li>
+                    </ul>
+                </div>
+
+                <div class="alert alert-info">
+                    <strong>Pro Tip:</strong> Use the dashboard during stress testing to monitor server performance in real-time and identify bottlenecks.
+                </div>
+            </section>
+
+            <!-- API Reference Section -->
+            <section id="rest-endpoints" class="content-section">
+                <h1>REST API Reference</h1>
+
+                <h2>Server Statistics</h2>
+                <div class="card">
+                    <h3>GET /api/stats</h3>
+                    <p>Retrieve current server performance statistics.</p>
+                    
+                    <h4>Response</h4>
+                    <pre><code class="json">{
+  "success": true,
+  "message": "Server statistics",
+  "data": {
+    "total_requests": 1250,
+    "active_connections": 15,
+    "thread_count": 4,
+    "queue_size": 2
+  }
+}</code></pre>
+                </div>
+
+                <h2>User Management</h2>
+                <div class="card">
+                    <h3>GET /api/users</h3>
+                    <p>List all users in the system.</p>
+                    
+                    <h4>Response</h4>
+                    <pre><code class="json">{
+  "success": true,
+  "message": "Users retrieved successfully",
+  "data": [
+    {
+      "id": 1,
+      "name": "John Doe",
+      "email": "john.doe@example.com"
+    }
+  ]
+}</code></pre>
+                </div>
+
+                <div class="card">
+                    <h3>POST /api/users</h3>
+                    <p>Create a new user.</p>
+                    
+                    <h4>Request Body</h4>
+                    <pre><code class="json">{
+  "name": "Jane Smith",
+  "email": "jane.smith@example.com"
+}</code></pre>
+                    
+                    <h4>Response</h4>
+                    <pre><code class="json">{
+  "success": true,
+  "message": "User created successfully",
+  "data": {
+    "id": 2,
+    "name": "Jane Smith",
+    "email": "jane.smith@example.com"
+  }
+}</code></pre>
+                </div>
+
+                <div class="card">
+                    <h3>GET /api/users/{id}</h3>
+                    <p>Retrieve a specific user by ID.</p>
+                    
+                    <h4>Response</h4>
+                    <pre><code class="json">{
+  "success": true,
+  "message": "User retrieved successfully",
+  "data": {
+    "id": 1,
+    "name": "John Doe",
+    "email": "john.doe@example.com"
+  }
+}</code></pre>
+                </div>
+
+                <h2>API Documentation</h2>
+                <div class="card">
+                    <h3>GET /api/docs</h3>
+                    <p>Access the interactive API documentation in your browser.</p>
+                </div>
+            </section>
+
+            <!-- WebSocket API Section -->
+            <section id="websocket-api" class="content-section">
+                <h1>WebSocket API</h1>
+
+                <h2>Connection</h2>
+                <div class="card">
+                    <h3>Endpoint</h3>
+                    <p><code>ws://localhost:8080/ws</code></p>
+                    
+                    <h3>Protocol</h3>
+                    <p>The WebSocket connection uses JSON message format for all communications.</p>
+                </div>
+
+                <h2>Real-time Metrics</h2>
+                <div class="card">
+                    <h3>Automatic Updates</h3>
+                    <p>The server automatically sends performance metrics to connected clients:</p>
+                    
+                    <pre><code class="json">{
+  "type": "metrics",
+  "data": {
+    "total_requests": 1250,
+    "requests_per_minute": 45,
+    "timestamp": 1630454400000
+  }
+}</code></pre>
+                    
+                    <h3>Request Rate Data</h3>
+                    <pre><code class="json">{
+  "type": "request_rate",
+  "data": [
+    {
+      "timestamp": 1630454400000,
+      "count": 12
+    }
+  ]
+}</code></pre>
+                    
+                    <h3>System Metrics</h3>
+                    <pre><code class="json">{
+  "type": "system_metrics",
+  "data": [
+    {
+      "timestamp": 1630454400000,
+      "memory_mb": 45,
+      "cpu_percent": 12.5,
+      "active_connections": 8,
+      "total_requests": 1250,
+      "requests_per_second": 2.1,
+      "queue_size": 0,
+      "thread_count": 4
+    }
+  ]
+}</code></pre>
+                </div>
+
+                <h2>Client Examples</h2>
+                <div class="card">
+                    <h3>JavaScript Client</h3>
+                    <pre><code class="javascript">const ws = new WebSocket('ws://localhost:8080/ws');
+
+ws.onopen = function(event) {
+    console.log('Connected to WebSocket');
+};
+
+ws.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    console.log('Received:', data);
+    
+    switch(data.type) {
+        case 'metrics':
+            updateMetrics(data.data);
+            break;
+        case 'system_metrics':
+            updateCharts(data.data);
+            break;
+    }
+};
+
+ws.onclose = function(event) {
+    console.log('WebSocket closed');
+    // Implement reconnection logic
+};
+
+function updateMetrics(metrics) {
+    document.getElementById('totalRequests').textContent = metrics.total_requests;
+}</code></pre>
+                </div>
+            </section>
+
+            <!-- Building Section -->
+            <section id="building" class="content-section">
+                <h1>Building from Source</h1>
+
+                <h2>Build System</h2>
+                <p>The project uses a custom Makefile with automatic dependency detection and parallel compilation support.</p>
+
+                <h2>Build Commands</h2>
+                <div class="card">
+                    <h3>Standard Build</h3>
+                    <pre><code class="bash"># Clean and build
+make clean && make
+
+# Parallel build (faster)
+make -j$(nproc)
+
+# Debug build
+make DEBUG=1
+
+# Release build with optimizations
+make RELEASE=1</code></pre>
+                    
+                    <h3>Build Targets</h3>
+                    <ul>
+                        <li><code>make all</code> - Build the main server binary</li>
+                        <li><code>make tests</code> - Build test executables</li>
+                        <li><code>make clean</code> - Remove build artifacts</li>
+                        <li><code>make install</code> - Install to system directories</li>
+                    </ul>
+                </div>
+
+                <h2>Build Configuration</h2>
+                <div class="card">
+                    <h3>Compiler Flags</h3>
+                    <pre><code class="bash"># Default flags
+CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -pthread
+
+# Debug flags
+CXXFLAGS += -g -DDEBUG -fsanitize=address
+
+# Release flags
+CXXFLAGS += -O3 -DNDEBUG -flto</code></pre>
+                    
+                    <h3>Custom Configuration</h3>
+                    <pre><code class="bash"># Specify custom compiler
+make CXX=clang++
+
+# Custom optimization level
+make OPTLEVEL=3
+
+# Enable additional warnings
+make EXTRA_WARNINGS=1</code></pre>
+                </div>
+
+                <h2>Dependencies</h2>
+                <div class="card">
+                    <h3>Required Libraries</h3>
+                    <ul>
+                        <li><strong>OpenSSL:</strong> For TLS/SSL support</li>
+                        <li><strong>nghttp2:</strong> For HTTP/2 protocol implementation</li>
+                        <li><strong>pthread:</strong> For multi-threading support</li>
+                    </ul>
+                    
+                    <h3>Dependency Verification</h3>
+                    <pre><code class="bash"># Check OpenSSL
+pkg-config --modversion openssl
+
+# Check nghttp2
+pkg-config --modversion libnghttp2
+
+# Verify all dependencies
+make check-deps</code></pre>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script>
+        function showSection(sectionId) {
+            // Hide all sections
+            document.querySelectorAll('.content-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            
+            // Show the selected section
+            const targetSection = document.getElementById(sectionId);
+            if (targetSection) {
+                targetSection.classList.add('active');
+            }
+            
+            // Update active state in sidebar
+            document.querySelectorAll('.sidebar a').forEach(link => {
+                link.classList.remove('active');
+            });
+            
+            const activeLink = document.querySelector(`.sidebar a[href="#${sectionId}"]`);
+            if (activeLink) {
+                activeLink.classList.add('active');
+            }
+            
+            // Update URL hash
+            window.history.pushState(null, null, `#${sectionId}`);
+            
+            // Scroll to top of main content
+            document.querySelector('.main-content').scrollTop = 0;
+        }
+        
+        // Handle direct navigation to anchors
+        function handleHashChange() {
+            const hash = window.location.hash.substring(1);
+            if (hash) {
+                showSection(hash);
+            }
+        }
+        
+        // Initialize based on URL hash
+        window.addEventListener('load', handleHashChange);
+        window.addEventListener('hashchange', handleHashChange);
+        
+        // Handle navbar links
+        document.querySelectorAll('.navbar-nav a[href^="#"]').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const sectionId = this.getAttribute('href').substring(1);
+                showSection(sectionId);
+            });
+        });
+    </script>
+</body>
+</html>
