@@ -52,7 +52,6 @@ cmake_install.cmake
 !Makefile  # Keep our custom Makefile
 
 # Core dumps
-core
 core.*
 
 # Logs
