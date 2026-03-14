@@ -56,7 +56,7 @@ TEST_TARGETS = $(BINDIR)/load_tester $(BINDIR)/server_tester $(BINDIR)/unit_test
 INCLUDE_PATHS = 
 
 # === DEFAULT TARGET ===
-.PHONY: all clean test install help debug release
+.PHONY: all clean test install help debug release docs docs-serve
 
 all: $(TARGET)
 
@@ -108,6 +108,17 @@ release: CXXFLAGS += -DNDEBUG -O3
 release: $(TARGET)
 	@echo "🚀 Release build complete"
 
+# === DOCUMENTATION (MkDocs) ===
+MKDOCS = $(if $(wildcard .venv/bin/mkdocs),.venv/bin/mkdocs,mkdocs)
+docs:
+	@echo "📖 Building documentation..."
+	$(MKDOCS) build --strict
+	@echo "✅ Documentation built in site/"
+
+docs-serve:
+	@echo "📖 Serving documentation at http://127.0.0.1:8000"
+	$(MKDOCS) serve
+
 # === TESTING ===
 test: $(TARGET)
 	@echo "🧪 Running tests..."
@@ -134,6 +145,8 @@ help:
 	@echo "  clean        - Remove build artifacts"
 	@echo "  help         - Show this help"
 	@echo "  info         - Show project information"
+	@echo "  docs         - Build documentation (MkDocs, output in site/)"
+	@echo "  docs-serve   - Serve documentation locally (mkdocs serve)"
 
 info:
 	@echo "📊 Project Information:"
@@ -164,7 +177,7 @@ tools: load_tester server_tester debug_test
 	@echo "✅ All tools built successfully"
 
 # === PHONY TARGETS ===
-.PHONY: all clean test help debug release info load_tester server_tester debug_test tools
+.PHONY: all clean test help debug release info docs docs-serve load_tester server_tester debug_test tools
 
 # === DEPENDENCY TRACKING ===
 -include $(ALL_OBJECTS:.o=.d)

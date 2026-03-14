@@ -1,0 +1,30 @@
+---
+description: Makefile and build system conventions for the webserver
+globs: "Makefile,Makefile.*"
+alwaysApply: false
+---
+
+# Makefile Conventions
+
+## Structure
+
+- **Directories**: `SRCDIR=src`, `INCDIR=include`, `BUILDDIR=build`, `BINDIR=bin`, `OBJDIR=$(BUILDDIR)/obj`.
+- **Modules**: Each module has `$(MODULE)_SRCDIR`, `$(MODULE)_INCDIR`, `$(MODULE)_SOURCES`, `$(MODULE)_OBJECTS` (e.g. CORE, HANDLERS, NETWORK, UTILS).
+- **Include paths**: Keep `INCLUDE_PATHS` empty; sources use relative `#include` paths to `include/`.
+
+## Adding New Source Files
+
+- New `.cpp` in an existing module (e.g. `src/handlers/`) is picked up automatically via `$(wildcard $(HANDLERS_SRCDIR)/*.cpp)`.
+- New **module**: add `NEWMODULE_SRCDIR`, `NEWMODULE_INCDIR`, add to `ALL_SOURCES`/`ALL_OBJECTS`/`ALL_HEADERS`, and add an `$(OBJDIR)/newmodule/%.o` rule and directory target.
+
+## Targets
+
+- `all`: build `$(BINDIR)/webserver`.
+- `debug` / `release`: override CXXFLAGS; do not remove `-std=c++14` or required warnings.
+- `clean`: remove `$(BUILDDIR)` and `$(BINDIR)`.
+- `test`: run integration-style checks (timeout, curl, pkill).
+- Keep `CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -pthread` and `LDFLAGS = -pthread -lssl -lcrypto -lnghttp2` as the baseline.
+
+## Compilation Rules
+
+- Object files live in `$(OBJDIR)/<module>/`. Each module has a pattern rule like `$(OBJDIR)/core/%.o: $(CORE_SRCDIR)/%.cpp $(ALL_HEADERS)`. Use `$(INCLUDE_PATHS)` in the compile command so that if includes are ever added, one place controls them.

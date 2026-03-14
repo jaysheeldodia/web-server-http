@@ -1,0 +1,44 @@
+---
+description: C++ coding standards and conventions for the HTTP/2 webserver
+globs: "**/*.cpp,**/*.h,**/*.hpp"
+alwaysApply: false
+---
+
+# C++ WebServer Standards
+
+## Include Paths (Required)
+
+- **Source files** (`src/**/*.cpp`): Use relative paths from source to `include/`.
+  - From `src/core/`: `#include "../../include/core/header.h"`
+  - From `src/handlers/`: `#include "../../include/handlers/header.h"`
+  - From `src/network/`: `#include "../../include/network/header.h"`
+- **Header files** (`include/**/*.h`): Use relative paths between modules.
+  - Same module: `#include "thread_pool.h"`
+  - Other module: `#include "../network/http_request.h"`
+- System and library includes use angle brackets: `#include <openssl/ssl.h>`, `#include <string>`.
+
+Do not rely on `-I` include paths in the Makefile; the project uses self-contained relative imports.
+
+## Language and Style
+
+- **Standard**: C++14. Use `-std=c++14`-compatible features only.
+- **Naming**: Classes PascalCase; functions and variables snake_case; constants UPPER_SNAKE or match existing (e.g. `g_shutdown_requested`).
+- **Header guards**: `#ifndef MODULE_NAME_H` / `#define MODULE_NAME_H` / `#endif // MODULE_NAME_H`.
+
+## Module Layout
+
+- **Core** (`src/core/`, `include/core/`): Server, thread pool, main, shutdown, globals.
+- **Handlers** (`src/handlers/`, `include/handlers/`): HTTP/2, file, JSON, WebSocket.
+- **Network** (`src/network/`, `include/network/`): HTTP request/response.
+- **Utils** (`src/utils/`, `include/utils/`): Shared helpers.
+
+When adding a new module, add both `src/<module>/` and `include/<module>/`, and follow the same include pattern. Update the Makefile `*_SRCDIR`/`*_INCDIR` and source lists if you add a new top-level module.
+
+## Concurrency and Safety
+
+- Use `std::mutex` with `std::lock_guard` (or existing patterns) for shared state; prefer `std::atomic` for simple flags/counters.
+- Respect `ShutdownCoordinator` and global shutdown flags for graceful shutdown; do not block indefinitely when shutdown is requested.
+
+## Dependencies
+
+- OpenSSL (ssl, crypto), nghttp2, pthread. Link with `-lssl -lcrypto -lnghttp2 -pthread`. Do not introduce new system libraries without updating the Makefile and docs.

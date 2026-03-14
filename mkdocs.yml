@@ -1,0 +1,43 @@
+# MkDocs configuration for C++ WebServer documentation
+# Build: mkdocs build  (output: site/)
+# Preview: mkdocs serve
+# Strict (fail on broken links): mkdocs build --strict
+
+site_name: C++ WebServer Documentation
+site_description: Documentation for the high-performance C++ HTTP/1.1 and HTTP/2 web server
+site_url: https://github.com/jaysheeldodia/web-server-http
+
+docs_dir: docs/pages
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Concepts: concepts.md
+    - Quick Start: getting-started.md
+    - Installation: installation.md
+    - Configuration: configuration.md
+  - Architecture:
+    - Overview: architecture.md
+    - Thread Pool: thread-pool.md
+    - HTTP/2: http2.md
+    - WebSocket: websocket.md
+  - API Reference:
+    - REST Endpoints: api-rest.md
+    - WebSocket API: api-websocket.md
+  - Admin Dashboard: admin-dashboard.md
+  - Development:
+    - Building: building.md
+    - Testing: testing.md
+    - Benchmarks: benchmarks.md
+  - About: about-documentation.md
+
+theme:
+  name: readthedocs
+
+plugins:
+  - search
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - fenced_code

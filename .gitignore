@@ -72,6 +72,8 @@ error.log
 doc/
 docs/html/
 docs/latex/
+site/
+.venv/
 
 # Test coverage files
 *.gcov

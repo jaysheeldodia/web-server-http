@@ -1,0 +1,40 @@
+---
+description: Markdown documentation style for MkDocs (Python); structure, links, and HTML conversion
+globs: "**/*.md,docs/**/*.md"
+alwaysApply: false
+---
+
+# Markdown for MkDocs
+
+## File and Path Conventions
+
+- Use **lowercase filenames** with hyphens: `getting-started.md`, `api-reference.md`. Avoid spaces and underscores in doc filenames.
+- Place documentation under `docs/` so MkDocs can discover pages. The nav order is defined in `mkdocs.yml`, not by file order on disk.
+
+## Internal Links
+
+- Link to other docs by **relative path to the `.md` file** (MkDocs resolves them to HTML):
+  - `[Quick Start](getting-started.md)`, `[API](reference/api.md)`, `[Section](page.md#section-anchor)`.
+- Avoid hardcoding `.html` in links; MkDocs generates HTML paths. Use `.md` in source.
+- Anchors are auto-generated from headings: lowercase, spaces → hyphens, e.g. `## Building the project` → `#building-the-project`.
+
+## Headings and Structure
+
+- One **H1** (`#`) per document as the page title. Use **H2** (`##`) for major sections, **H3** (`###`) for subsections. Don’t skip levels.
+- Keep heading hierarchy consistent so the MkDocs table-of-contents and nav make sense.
+
+## Code and Syntax
+
+- Fence code blocks with a **language** for highlighting: ` ```bash `, ` ```cpp `, ` ```json `.
+- Inline code with single backticks for commands, flags, file names, and symbols.
+
+## MkDocs-Friendly Markdown
+
+- **Tables**: Standard GFM tables; they render in MkDocs.
+- **Admonitions** (if using `mkdocs-material`): use `!!! note "Title"` / `!!! warning` etc. Otherwise stick to bold/blockquote for callouts.
+- **Frontmatter**: Optional. If you use YAML frontmatter (e.g. `title:`), keep it minimal; MkDocs can use `nav` in `mkdocs.yml` for titles.
+
+## What to Avoid
+
+- Jekyll/Liquid syntax (e.g. `{% ... %}`) if the target is MkDocs; it won’t be processed.
+- Raw HTML unless necessary; prefer Markdown so the MkDocs build stays consistent.

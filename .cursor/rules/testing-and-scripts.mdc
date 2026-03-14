@@ -1,0 +1,23 @@
+---
+description: Testing and script conventions for the webserver project
+globs: "tests/**/*,scripts/**/*"
+alwaysApply: false
+---
+
+# Testing and Scripts
+
+## Test Layout
+
+- **Unit tests**: `tests/unit/` (e.g. `server_test.cpp`, `http2_test.cpp`, `load_test.cpp`). Build may use the main Makefile or separate targets; test sources live under `tests/` or `tools/` as documented in the Makefile.
+- **Scripts**: `scripts/` for shell scripts (e.g. `test_http2.sh`, `test_complete_tls.sh`, `quick_tls_test.sh`). Use for TLS, HTTP/2, and integration checks.
+
+## Script Conventions
+
+- Prefer portable shell (`#!/bin/bash` or `#!/usr/bin/env bash`) and `set -e` (or explicit error handling) where appropriate.
+- Document required environment (e.g. server running on port 8080, TLS certs in a given path) at the top or in project docs.
+- Use `timeout` for commands that might hang; align with `make test` (e.g. `timeout 10s`).
+
+## Running and Extending Tests
+
+- Full build: `make clean && make all`. Run server: `./bin/webserver`. Admin dashboard: `http://localhost:8080/admin-dashboard`.
+- When adding tests, place under `tests/unit/` or the existing structure; if adding a new test binary, add a corresponding Makefile target and document in `make help` or PROJECT_STRUCTURE.md.
