@@ -1,4 +1,4 @@
-# C++ Web Server
+<h1 align="center">A Web Server in C++</h1>
 
 A high-performance HTTP/1.1 and HTTP/2 web server written in C++. It uses a thread pool to handle many connections at once, supports WebSocket for real-time communication, and can serve static files and a REST-style API. Optional TLS is supported via OpenSSL.
 
